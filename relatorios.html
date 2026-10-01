@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Relatórios operacionais — CARRISSIMI IoT</title>
+  <meta name="description" content="Relatórios de utilização, ociosidade e impacto financeiro estimado dos equipamentos por período, com exportação em CSV e PDF." />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+
+    <!-- ============ MENU LATERAL ============ -->
+    <aside class="menu" aria-label="Menu principal">
+      <div class="marca">
+        <div class="marca-icone">
+          <svg viewBox="0 0 24 24" class="ico"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        </div>
+        <div>
+          <p class="marca-nome">CARRISSIMI</p>
+          <p class="marca-sub">IoT Supervisão</p>
+        </div>
+      </div>
+
+      <nav class="menu-lista">
+        <a class="menu-item" href="index.html" data-nav>
+          <svg viewBox="0 0 24 24" class="ico"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg>
+          Dashboard
+        </a>
+        <span class="menu-item desativado" title="Em breve">
+          <svg viewBox="0 0 24 24" class="ico"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg>
+          Equipamentos <em>em breve</em>
+        </span>
+        <span class="menu-item desativado" title="Em breve">
+          <svg viewBox="0 0 24 24" class="ico"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+          Histórico <em>em breve</em>
+        </span>
+        <a class="menu-item ativo" href="relatorios.html" data-nav aria-current="page">
+          <svg viewBox="0 0 24 24" class="ico"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8M16 13H8M16 17H8"/></svg>
+          Relatórios
+        </a>
+        <span class="menu-item desativado" title="Em breve">
+          <svg viewBox="0 0 24 24" class="ico"><path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-3"/></svg>
+          Indicadores <em>em breve</em>
+        </span>
+      </nav>
+
+      <div class="menu-rodape">
+        <p class="menu-empresa" id="empresaNome">—</p>
+        <p class="menu-cnpj" id="empresaCnpj"></p>
+      </div>
+    </aside>
+
+    <!-- ============ CONTEÚDO ============ -->
+    <div class="conteudo">
+      <nav class="nav-mobile" aria-label="Menu">
+        <a href="index.html" data-nav>Dashboard</a>
+        <a href="relatorios.html" data-nav class="ativo" aria-current="page">Relatórios</a>
+      </nav>
+
+      <header class="topo">
+        <div class="topo-titulo">
+          <h1>Relatórios operacionais</h1>
+          <p class="topo-sub"><span id="subtitulo">Carregando…</span></p>
+        </div>
+
+        <div class="topo-acoes">
+          <div class="periodos" id="periodos" role="group" aria-label="Período do relatório"></div>
+          <div class="periodo-custom" id="periodoCustom" hidden>
+            <input type="date" id="dataDe" aria-label="Data inicial" />
+            <span>→</span>
+            <input type="date" id="dataAte" aria-label="Data final" />
+          </div>
+          <select id="filtroEquip" class="seletor" aria-label="Equipamento"></select>
+          <button type="button" class="botao botao-principal" id="btnImprimir">Imprimir / salvar PDF</button>
+        </div>
+      </header>
+
+      <main class="principal" id="principal">
+        <div id="faixaAviso"></div>
+
+        <!-- Identificação do relatório (aparece também na impressão) -->
+        <section class="painel identidade" id="identidade" aria-label="Identificação do relatório"></section>
+
+        <!-- Resumo -->
+        <section aria-label="Resumo do período">
+          <div class="grade-kpi" id="kpisResumo1"></div>
+          <div class="grade-kpi" id="kpisResumo2"></div>
+        </section>
+
+        <!-- Conclusões automáticas -->
+        <section class="painel">
+          <header class="painel-cab">
+            <div>
+              <h2>Principais conclusões</h2>
+              <p>Resumo em texto gerado automaticamente a partir dos números do período.</p>
+            </div>
+          </header>
+          <ul class="conclusoes" id="conclusoes"></ul>
+        </section>
+
+        <!-- Gráfico -->
+        <section class="painel">
+          <header class="painel-cab">
+            <div>
+              <h2 id="tituloGrafico">Evolução no período</h2>
+              <p>Como o tempo monitorado se dividiu entre os estados (% do tempo com registro do CLP).</p>
+            </div>
+          </header>
+          <div class="caixa-grafico"><canvas id="graficoPeriodo"></canvas><p class="vazio">Sem dados no período.</p></div>
+        </section>
+
+        <!-- Tabela por equipamento -->
+        <section class="painel">
+          <header class="painel-cab">
+            <div>
+              <h2>Detalhamento por equipamento</h2>
+              <p>Consolidação do período para cada máquina, com o total da seleção no final.</p>
+            </div>
+            <div class="painel-botoes sem-impressao">
+              <button type="button" class="botao" id="btnParametros">Configurar valores (R$)</button>
+              <button type="button" class="botao" id="btnCsvEquip">Exportar CSV</button>
+            </div>
+          </header>
+          <div class="tabela-rolagem" id="tabelaEquip"></div>
+        </section>
+
+        <!-- Tabela por período -->
+        <section class="painel">
+          <header class="painel-cab">
+            <div>
+              <h2 id="tituloTabelaPeriodo">Detalhamento por período</h2>
+              <p>Divisão do relatório em partes menores, para ver em que momentos a produção caiu.</p>
+            </div>
+            <div class="painel-botoes sem-impressao">
+              <button type="button" class="botao" id="btnCsvPeriodo">Exportar CSV</button>
+            </div>
+          </header>
+          <div class="tabela-rolagem" id="tabelaPeriodo"></div>
+        </section>
+
+        <!-- Como os números são calculados -->
+        <section class="painel">
+          <details class="metodologia" open>
+            <summary>Como os números são calculados</summary>
+            <ul>
+              <li><strong>Tempo monitorado:</strong> só o tempo em que o sistema tem um estado registrado para a máquina. Períodos sem nenhum registro não entram na conta.</li>
+              <li><strong>Utilização:</strong> tempo <em>ativo</em> ÷ tempo monitorado.</li>
+              <li><strong>Disponibilidade:</strong> (tempo <em>ativo</em> + tempo em <em>espera</em>) ÷ tempo monitorado — ou seja, quanto tempo a máquina ficou ligada.</li>
+              <li><strong>Paradas:</strong> quantas vezes a máquina entrou no estado <em>inativo</em> no período.</li>
+              <li><strong>Maior período sem produzir:</strong> maior sequência contínua de <em>espera</em> e/ou <em>inativo</em>. Noites e fins de semana entram nessa conta.</li>
+              <li><strong>Impacto financeiro:</strong> estimativa = horas em espera × custo de ociosidade/h + horas inativas × custo de parada/h. Usa os valores que você informar; não é valor contábil.</li>
+              <li><strong>Comparação com o período anterior:</strong> período de mesma duração imediatamente antes (ex.: 30 dias × 30 dias anteriores; "Mês atual" × mês anterior até o mesmo ponto).</li>
+            </ul>
+          </details>
+        </section>
+
+        <footer class="rodape">
+          <span id="rodapeSync">—</span>
+          <span>CARRISSIMI IoT · Projeto acadêmico de Governança de TI (SENAI)</span>
+        </footer>
+      </main>
+    </div>
+  </div>
+
+  <!-- Janela: valores financeiros -->
+  <dialog id="dlgParametros" class="dialogo">
+    <form method="dialog" id="formParametros">
+      <h3>Valores para o cálculo financeiro</h3>
+      <p class="dialogo-texto">
+        Informe quanto custa (ou vale) uma hora. Os números ficam salvos só neste navegador
+        (e valem também para o Dashboard). Deixe em branco o que não souber.
+      </p>
+      <div id="camposParametros"></div>
+      <div class="dialogo-botoes">
+        <button type="button" class="botao botao-perigo" id="btnLimparParametros">Limpar tudo</button>
+        <span class="espaco"></span>
+        <button type="button" class="botao" id="btnCancelarParametros">Cancelar</button>
+        <button type="submit" class="botao botao-principal" value="salvar">Salvar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Bibliotecas (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+
+  <!-- Nosso código (a ordem importa!) -->
+  <script src="js/supabaseClient.js"></script>
+  <script src="js/metrics.js"></script>
+  <script src="js/demoData.js"></script>
+  <script src="js/relatorios.js"></script>
+</body>
+</html>

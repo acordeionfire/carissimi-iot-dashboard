@@ -41,7 +41,7 @@
     const equipamentos = [];
     const eventos = [];
     let contador = 1;
-    const inicio = new Date(agora - 66 * DIA);
+    const inicio = new Date(agora - 100 * DIA);
     inicio.setHours(0, 0, 0, 0);
 
     MAQUINAS.forEach((m, idx) => {

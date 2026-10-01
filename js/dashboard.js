@@ -976,6 +976,9 @@
      INÍCIO
      ------------------------------------------------------------ */
   function iniciar() {
+    if (MODO_DEMO) {
+      document.querySelectorAll('a[data-nav]').forEach((a) => (a.href = a.getAttribute('href') + '?demo=1'));
+    }
     ligarEventos();
     renderPeriodos();
     $('principal').classList.add('so-aviso');

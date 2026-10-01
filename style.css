@@ -396,3 +396,77 @@ td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .b-primaria { background: #19d1d2; }
 
 .pilula-conexao.aviso .led { background: var(--espera); }
+
+/* ============================================================
+   RELATÓRIOS
+   ============================================================ */
+
+/* menu de telas para celular (o menu lateral some em telas pequenas) */
+.nav-mobile { display: none; gap: 6px; padding: 10px 16px 0; overflow-x: auto; }
+.nav-mobile a { padding: 6px 14px; border: 1px solid var(--borda); border-radius: 999px; background: var(--painel); color: var(--texto-suave); text-decoration: none; font-size: 13px; white-space: nowrap; }
+.nav-mobile a.ativo { color: var(--primaria); border-color: rgba(25, 209, 210, 0.5); background: rgba(25, 209, 210, 0.1); }
+
+.seletor {
+  padding: 8px 12px; border-radius: 10px; border: 1px solid var(--borda); background: var(--painel);
+  color: var(--texto); font-family: var(--mono); font-size: 12px; color-scheme: dark; max-width: 220px;
+}
+.painel-botoes { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.itens-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+.identidade .subtitulo-mini { margin: 0; }
+
+.conclusoes { display: grid; gap: 10px; }
+.conclusoes li { position: relative; padding: 10px 14px 10px 36px; border: 1px solid var(--borda); border-radius: 8px; background: rgba(36, 44, 53, 0.25); font-size: 14px; }
+.conclusoes li::before { content: ''; position: absolute; left: 14px; top: 17px; width: 8px; height: 8px; border-radius: 50%; background: var(--primaria); }
+.conclusoes li.estado-vazio { padding: 20px; text-align: center; }
+.conclusoes li.estado-vazio::before { display: none; }
+.conclusoes strong { font-weight: 600; }
+
+.linha-total td { border-top: 2px solid var(--borda); background: rgba(36, 44, 53, 0.35); }
+.tabela-estreita { min-width: 720px; }
+
+.metodologia summary { cursor: pointer; font-family: var(--mono); font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--texto-suave); }
+.metodologia ul { display: grid; gap: 8px; margin-top: 14px; font-size: 13px; color: rgba(234, 239, 243, 0.85); }
+.metodologia li { padding-left: 14px; position: relative; }
+.metodologia li::before { content: '›'; position: absolute; left: 0; color: var(--primaria); }
+
+@media (max-width: 1180px) { .itens-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 900px) {
+  .nav-mobile { display: flex; }
+  .seletor { max-width: 100%; flex: 1 1 100%; }
+  .topo-acoes .botao-principal { flex: 1 1 100%; }
+}
+@media (max-width: 520px) { .itens-4 { grid-template-columns: 1fr; } }
+
+/* ---------- Impressão / salvar em PDF ---------- */
+@media print {
+  @page { margin: 12mm; }
+  :root {
+    --fundo: #fff; --texto: #111; --painel: #fff; --painel-2: #fff; --secundario: #e3e7ea;
+    --borda: #c4cad0; --texto-suave: #555; --primaria: #08808a;
+    --ativo: #178a3a; --espera: #a87400; --inativo: #c62828;
+  }
+  html, body { background: #fff !important; color: #111; }
+  body { font-size: 12px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .menu, .nav-mobile, .topo-acoes, .sem-impressao, .pilula-conexao, .periodo-custom, #faixaAviso .botao, .rodape button { display: none !important; }
+  .app { display: block; }
+  .topo { position: static; padding: 0 0 10px; background: none; border: 0; backdrop-filter: none; }
+  .principal { padding: 0; gap: 12px; }
+  .painel, .kpi, .item, .resposta, .conclusoes li {
+    background: #fff !important; box-shadow: none !important; border: 1px solid var(--borda) !important; break-inside: avoid;
+  }
+  .kpi-valor { font-size: 20px; }
+  .grade-kpi { gap: 8px; }
+  .grade-kpi + .grade-kpi { margin-top: 8px; }
+  .anel { width: 44px; height: 44px; }
+  .anel::after { inset: 6px; background: #fff; }
+  .tabela-rolagem { overflow: visible; }
+  table, .tabela-estreita { min-width: 0; font-size: 10.5px; }
+  th, td { padding-right: 6px; }
+  .util-celula .trilho { width: 44px; }
+  .caixa-grafico { height: 240px; }
+  .metodologia ul { color: #333; }
+  .painel { break-inside: auto; }
+  section.painel:has(table) { break-inside: auto; }
+  tr { break-inside: avoid; }
+}

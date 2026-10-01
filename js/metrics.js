@@ -15,7 +15,7 @@
   const DIA = 24 * HORA;
 
   const ESTADOS = ['ativo', 'espera', 'inativo'];
-  const ROTULO = { ativo: 'ATIVO', espera: 'EM_ESPERA', inativo: 'INATIVO' };
+  const ROTULO = { ativo: 'ATIVO', espera: 'ESPERA', inativo: 'INATIVO' };
 
   /* ---------- Status vindo do banco ---------- */
 
@@ -25,9 +25,10 @@
       .trim()
       .toLowerCase()
       .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '');
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[\s_-]+/g, ' '); // "EM_ESPERA", "em-espera" e "em  espera" viram "em espera"
     if (v === 'ativo') return 'ativo';
-    if (v === 'espera' || v === 'em espera' || v === 'em_espera') return 'espera';
+    if (v === 'espera' || v === 'em espera') return 'espera';
     if (v === 'inativo') return 'inativo';
     return null;
   }
@@ -60,6 +61,12 @@
         const de = new Date(d.getFullYear(), d.getMonth(), 1).getTime();
         return { de, ate: agora, rotulo: 'Mês atual' };
       }
+      case 'mesAnterior': {
+        const d = new Date(agora);
+        const de = new Date(d.getFullYear(), d.getMonth() - 1, 1).getTime();
+        const ate = new Date(d.getFullYear(), d.getMonth(), 1).getTime() - 1;
+        return { de, ate, rotulo: 'Mês anterior' };
+      }
       case 'custom': {
         const de = custom && custom.de ? custom.de : agora - 7 * DIA;
         const ate = Math.min(custom && custom.ate ? custom.ate : agora, agora);
@@ -87,6 +94,11 @@
       const d = new Date(p.de);
       const de = new Date(d.getFullYear(), d.getMonth() - 1, 1).getTime();
       return { de, ate: de + duracao };
+    }
+    if (chave === 'mesAnterior') {
+      const d = new Date(p.de);
+      const de = new Date(d.getFullYear(), d.getMonth() - 1, 1).getTime();
+      return { de, ate: p.de - 1 };
     }
     return { de: p.de - duracao, ate: p.de };
   }
