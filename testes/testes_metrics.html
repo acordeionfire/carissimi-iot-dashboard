@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <title>Testes do metrics.js — CARISSIMI IoT</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, sans-serif; background: #0e1419; color: #e6edf3; margin: 0; padding: 24px; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    p.sub { color: #8b98a5; margin: 0 0 16px; }
+    #resumo { font-size: 18px; font-weight: 700; margin: 12px 0 16px; }
+    .ok { color: #3ddc84; } .erro { color: #ff6b6b; }
+    ul { list-style: none; padding: 0; margin: 0; max-width: 980px; }
+    li { padding: 8px 12px; border-bottom: 1px solid #1f2933; }
+    li small { display: block; color: #ff9b9b; margin-top: 4px; font-family: ui-monospace, monospace; }
+  </style>
+</head>
+<body>
+  <h1>Testes do <code>js/metrics.js</code></h1>
+  <p class="sub">Página de teste (não faz parte do site). Abra pelo Live Server. Todos os itens precisam estar com ✔.</p>
+  <div id="resumo">Rodando…</div>
+  <ul id="lista"></ul>
+
+  <script src="../js/metrics.js"></script>
+  <script src="casos_metrics.js"></script>
+  <script>
+    (function () {
+      const lista = document.getElementById('lista');
+      const resumo = document.getElementById('resumo');
+      let resultados;
+      try {
+        resultados = window.TestesMetrics.rodar(window.Metrics);
+      } catch (e) {
+        resumo.textContent = '✘ Não foi possível rodar os testes: ' + e.message;
+        resumo.className = 'erro';
+        return;
+      }
+      let ok = 0;
+      resultados.forEach(function (r) {
+        const li = document.createElement('li');
+        li.className = r.ok ? 'ok' : 'erro';
+        li.textContent = (r.ok ? '✔ ' : '✘ ') + r.nome;
+        if (!r.ok) {
+          const d = document.createElement('small');
+          d.textContent = r.erro;
+          li.appendChild(d);
+        } else ok++;
+        lista.appendChild(li);
+        console.log((r.ok ? '✔ ' : '✘ ') + r.nome + (r.ok ? '' : ' → ' + r.erro));
+      });
+      resumo.textContent = (ok === resultados.length ? '✔ ' : '✘ ') + ok + ' de ' + resultados.length + ' testes passaram';
+      resumo.className = ok === resultados.length ? 'ok' : 'erro';
+    })();
+  </script>
+</body>
+</html>

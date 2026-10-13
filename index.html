@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Dashboard — CARRISSIMI IoT | Supervisão Industrial</title>
-  <meta name="description" content="Monitoramento em tempo real de tornos industriais via CLP: utilização, disponibilidade, perda de capacidade e impacto financeiro estimado." />
+  <title>Dashboard — CARISSIMI IoT | Supervisão Industrial</title>
+  <meta name="description" content="Monitoramento em tempo real de tornos industriais via CLP: disponibilidade (OEE), execuções, horas extras, perda de capacidade e impacto financeiro estimado." />
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -21,7 +21,7 @@
           <svg viewBox="0 0 24 24" class="ico"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
         </div>
         <div>
-          <p class="marca-nome">CARRISSIMI</p>
+          <p class="marca-nome">CARISSIMI</p>
           <p class="marca-sub">IoT Supervisão</p>
         </div>
       </div>
@@ -47,6 +47,9 @@
           <svg viewBox="0 0 24 24" class="ico"><path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-3"/></svg>
           Indicadores <em>em breve</em>
         </span>
+          <a class="menu-item" href="configuracoes.html" data-nav>
+           <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg> Configurações
+          </a>
       </nav>
 
       <div class="menu-rodape">
@@ -60,6 +63,7 @@
       <nav class="nav-mobile" aria-label="Menu">
         <a href="index.html" data-nav class="ativo" aria-current="page">Dashboard</a>
         <a href="relatorios.html" data-nav>Relatórios</a>
+        <a href="configuracoes.html" data-nav>Configurações</a>
       </nav>
 
       <header class="topo">
@@ -89,7 +93,7 @@
         <!-- 1. KPIs -->
         <section aria-label="Indicadores principais">
           <div class="grade-kpi" id="kpisAgora"></div>
-          <div class="grade-kpi" id="kpisPeriodo"></div>
+          <div class="grade-kpi grade-kpi-3" id="kpisPeriodo"></div>
         </section>
 
         <!-- 2. Equipamentos agora -->
@@ -108,13 +112,14 @@
           <header class="painel-cab">
             <div>
               <h2>Linha do tempo dos estados</h2>
-              <p>Cada faixa mostra o que a máquina fez ao longo do período. Passe o mouse para ver os detalhes.</p>
+              <p>Cada faixa mostra o que a máquina fez dentro do horário de funcionamento (e a produção fora dele). Passe o mouse para ver os detalhes.</p>
             </div>
             <ul class="legenda">
               <li><span class="led led-ativo"></span>Ativo</li>
               <li><span class="led led-espera"></span>Espera</li>
               <li><span class="led led-inativo"></span>Inativo</li>
-              <li><span class="led led-semdados"></span>Sem dados</li>
+              <li><span class="led led-extra"></span>Hora extra</li>
+              <li><span class="led led-semdados"></span>Sem dados / sem sinal</li>
             </ul>
           </header>
           <div id="linhaTempo"></div>
@@ -126,7 +131,7 @@
             <header class="painel-cab">
               <div>
                 <h2>Perda de capacidade produtiva</h2>
-                <p>Quanto do tempo monitorado virou produção.</p>
+                <p>Quanto do tempo programado virou produção.</p>
               </div>
             </header>
             <div id="capacidade"></div>
@@ -172,8 +177,8 @@
           <section class="painel">
             <header class="painel-cab">
               <div>
-                <h2>Evolução da utilização</h2>
-                <p id="evolucaoSub">Distribuição dos estados ao longo do período (% do tempo monitorado).</p>
+                <h2>Evolução da disponibilidade</h2>
+                <p id="evolucaoSub">Distribuição dos estados ao longo do período (% do tempo contado).</p>
               </div>
             </header>
             <div class="caixa-grafico"><canvas id="graficoEvolucao"></canvas><p class="vazio" data-vazio="graficoEvolucao">Sem dados no período.</p></div>
@@ -183,7 +188,7 @@
             <header class="painel-cab">
               <div>
                 <h2>Distribuição dos estados</h2>
-                <p>Horas por estado (todas as máquinas).</p>
+                <p>Horas por estado, dentro do horário e fora dele (todas as máquinas).</p>
               </div>
             </header>
             <div class="caixa-grafico"><canvas id="graficoRosca"></canvas><p class="vazio" data-vazio="graficoRosca">Sem dados no período.</p></div>
@@ -213,7 +218,7 @@
 
         <footer class="rodape">
           <span id="rodapeSync">—</span>
-          <span>CARRISSIMI IoT · Projeto acadêmico de Governança de TI (SENAI)</span>
+          <span>CARISSIMI IoT · Projeto acadêmico de Governança de TI (SENAI)</span>
         </footer>
       </main>
     </div>
@@ -224,10 +229,11 @@
     <form method="dialog" id="formParametros">
       <h3>Valores para o cálculo financeiro</h3>
       <p class="dialogo-texto">
-        Informe quanto custa (ou vale) uma hora. Os números ficam salvos só neste navegador.
-        Deixe em branco o que não souber — o painel avisa o que falta.
+        Informe quanto custa (ou vale) uma hora, como estimativa média da empresa. Os números ficam salvos no banco e valem para
+        o Dashboard e os Relatórios. Deixe em branco o que não souber — o painel avisa o que falta.
       </p>
       <div id="camposParametros"></div>
+      <p class="dialogo-texto" id="msgParametros" role="status" aria-live="polite"></p>
       <div class="dialogo-botoes">
         <button type="button" class="botao botao-perigo" id="btnLimparParametros">Limpar tudo</button>
         <span class="espaco"></span>
@@ -243,6 +249,7 @@
 
   <!-- Nosso código (a ordem importa!) -->
   <script src="js/supabaseClient.js"></script>
+  <script src="js/configEmpresa.js"></script>
   <script src="js/metrics.js"></script>
   <script src="js/demoData.js"></script>
   <script src="js/dashboard.js"></script>

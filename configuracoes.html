@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Configurações — CARISSIMI IoT | Supervisão Industrial</title>
+  <meta name="description" content="Configurações da empresa no CARISSIMI IoT: fuso horário, horário de funcionamento (turno) e valores em reais por hora usados nos cálculos financeiros." />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="menu" aria-label="Menu principal">
+      <div class="marca">
+        <div class="marca-icone">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+        </div>
+        <div>
+          <p class="marca-nome">CARISSIMI</p>
+          <p class="marca-sub">IoT Supervisão</p>
+        </div>
+      </div>
+      <nav class="menu-lista">
+        <a class="menu-item" href="index.html" data-nav>
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 14 4-4"></path><path d="M3.34 19a10 10 0 1 1 17.32 0"></path></svg> Dashboard
+        </a>
+        <span class="menu-item desativado" title="Em breve">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect><path d="M15 2v2"></path><path d="M15 20v2"></path><path d="M2 15h2"></path><path d="M2 9h2"></path><path d="M20 15h2"></path><path d="M20 9h2"></path><path d="M9 2v2"></path><path d="M9 20v2"></path></svg> Equipamentos <em>em breve</em>
+        </span>
+        <span class="menu-item desativado" title="Em breve">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></svg> Histórico <em>em breve</em>
+        </span>
+        <a class="menu-item" href="relatorios.html" data-nav>
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><line x1="10" y1="9" x2="8" y2="9"></line></svg> Relatórios
+        </a>
+        <span class="menu-item desativado" title="Em breve">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18"></path><path d="M18 17V9"></path><path d="M13 17V5"></path><path d="M8 17v-3"></path></svg> Indicadores <em>em breve</em>
+        </span>
+        <a class="menu-item ativo" href="configuracoes.html" data-nav aria-current="page">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg> Configurações
+        </a>
+      </nav>
+      <div class="menu-rodape">
+        <p class="menu-empresa" id="empresaNome">—</p>
+        <p class="menu-cnpj" id="empresaCnpj"></p>
+      </div>
+    </aside>
+
+    <div class="conteudo">
+      <nav class="nav-mobile" aria-label="Menu">
+        <a href="index.html" data-nav>Dashboard</a>
+        <a href="relatorios.html" data-nav>Relatórios</a>
+        <a href="configuracoes.html" data-nav class="ativo" aria-current="page">Configurações</a>
+      </nav>
+
+      <header class="topo">
+        <div class="topo-titulo">
+          <h1>Configurações</h1>
+          <p class="topo-sub"><span id="subtitulo">Fuso horário, horário de funcionamento e valores da empresa</span></p>
+        </div>
+        <div class="topo-acoes">
+          <div class="pilula-conexao" id="pilulaConexao" role="status" aria-live="polite">
+            <span class="led" id="pilulaLed"></span>
+            <span id="pilulaTexto">Conectando…</span>
+          </div>
+        </div>
+      </header>
+
+      <main class="principal carregando" id="principal">
+        <div id="faixaAviso"></div>
+
+        <!-- 1. Empresa e fuso -->
+        <section class="painel" id="painelFuso">
+          <header class="painel-cab">
+            <div>
+              <h2>Empresa e fuso horário</h2>
+              <p>O banco guarda os horários em UTC; todas as contas de dia, hora e turno usam o fuso da empresa.</p>
+            </div>
+          </header>
+          <dl class="cfg-empresa">
+            <div class="cfg-dado"><dt>Razão social</dt><dd id="cfgRazao">—</dd></div>
+            <div class="cfg-dado"><dt>Nome fantasia</dt><dd id="cfgFantasia">—</dd></div>
+            <div class="cfg-dado"><dt>CNPJ</dt><dd class="cfg-mono" id="cfgCnpj">—</dd></div>
+          </dl>
+          <div class="cfg-campo cfg-campo-fuso">
+            <label for="selFuso">Fuso horário</label>
+            <select class="cfg-select" id="selFuso"></select>
+          </div>
+          <div class="cfg-acoes">
+            <span class="cfg-mensagem" id="msgFuso" role="status" aria-live="polite"></span>
+            <button class="botao botao-principal" type="button" id="btnSalvarFuso">Salvar fuso</button>
+          </div>
+        </section>
+
+        <!-- 2. Horário de funcionamento -->
+        <section class="painel" id="painelHorario">
+          <header class="painel-cab">
+            <div>
+              <h2>Horário de funcionamento (turno)</h2>
+              <p>Defina em que horários a empresa produz. Só o tempo dentro do turno entra nos indicadores. Use mais de uma faixa por dia para tirar o almoço da conta.</p>
+            </div>
+          </header>
+
+          <div class="cfg-atalhos" role="group" aria-label="Atalhos de horário">
+            <button class="botao" type="button" id="btnAtalhoUteis">Seg–Sex 07:00–17:00</button>
+            <button class="botao" type="button" id="btnAtalhoAlmoco">Seg–Sex com almoço (07–12 e 13–17)</button>
+            <button class="botao" type="button" id="btnCopiarSegunda">Copiar a segunda para os dias úteis</button>
+            <button class="botao botao-perigo" type="button" id="btnLimparHorario">Limpar tudo</button>
+          </div>
+
+          <div class="cfg-semana" id="semana"></div>
+
+          <p class="cfg-resumo" id="cfgResumoSemana" aria-live="polite">Total semanal programado: —</p>
+          <div class="aviso" id="cfgAvisoSemHorario" hidden>
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>
+            <span>Sem horário cadastrado: os indicadores usam 24 h corridas e incluem noites e fins de semana.</span>
+          </div>
+          <ul class="cfg-erros" id="cfgErrosHorario" aria-live="polite" hidden></ul>
+          <p class="cfg-nota" id="cfgNotaHoraExtra"></p>
+
+          <div class="cfg-acoes">
+            <span class="cfg-mensagem" id="msgHorario" role="status" aria-live="polite"></span>
+            <button class="botao botao-principal" type="button" id="btnSalvarHorario">Salvar horário</button>
+          </div>
+        </section>
+
+        <!-- 3. Valores financeiros -->
+        <section class="painel" id="painelValores">
+          <header class="painel-cab">
+            <div>
+              <h2>Valores para o cálculo financeiro</h2>
+              <p>São <strong>estimativas médias por empresa e por hora</strong>, não valores contábeis exatos. Deixe em branco o que não souber: o painel avisa o que falta.</p>
+            </div>
+          </header>
+
+          <div class="cfg-valores">
+            <div class="cfg-campo">
+              <label for="valCustoOciosidadeHora">Custo de ociosidade (máquina ligada sem operar)</label>
+              <div class="cfg-entrada"><span>R$</span><input type="text" inputmode="decimal" id="valCustoOciosidadeHora" data-chave="custoOciosidadeHora" placeholder="0,00" autocomplete="off" aria-describedby="ajudaCustoOciosidadeHora" /><span>/ hora</span></div>
+              <p class="cfg-ajuda" id="ajudaCustoOciosidadeHora">Quanto custa 1 hora ligada sem cortar: energia, operador, depreciação.</p>
+            </div>
+            <div class="cfg-campo">
+              <label for="valCustoOportunidadeHora">Custo de oportunidade (máquina desligada no expediente) — estimado</label>
+              <div class="cfg-entrada"><span>R$</span><input type="text" inputmode="decimal" id="valCustoOportunidadeHora" data-chave="custoOportunidadeHora" placeholder="0,00" autocomplete="off" aria-describedby="ajudaCustoOportunidadeHora" /><span>/ hora</span></div>
+              <p class="cfg-ajuda" id="ajudaCustoOportunidadeHora">O que se deixa de ganhar por hora desligada (margem da peça × peças por hora). Só é perda real se havia demanda.</p>
+            </div>
+            <div class="cfg-campo">
+              <label for="valValorCapacidadeHora">Valor da capacidade produtiva</label>
+              <div class="cfg-entrada"><span>R$</span><input type="text" inputmode="decimal" id="valValorCapacidadeHora" data-chave="valorCapacidadeHora" placeholder="0,00" autocomplete="off" aria-describedby="ajudaValorCapacidadeHora" /><span>/ hora</span></div>
+              <p class="cfg-ajuda" id="ajudaValorCapacidadeHora">Quanto vale 1 hora de produção plena.</p>
+            </div>
+            <div class="cfg-campo">
+              <label for="valCustoOperacionalHora">Custo operacional (máquina ligada)</label>
+              <div class="cfg-entrada"><span>R$</span><input type="text" inputmode="decimal" id="valCustoOperacionalHora" data-chave="custoOperacionalHora" placeholder="0,00" autocomplete="off" aria-describedby="ajudaCustoOperacionalHora" /><span>/ hora</span></div>
+              <p class="cfg-ajuda" id="ajudaCustoOperacionalHora">Quanto custa manter a máquina ligada, operando ou não.</p>
+            </div>
+          </div>
+
+          <ul class="cfg-erros" id="cfgErrosValores" aria-live="polite" hidden></ul>
+
+          <div class="cfg-acoes">
+            <button class="botao botao-perigo" type="button" id="btnLimparValores">Limpar tudo</button>
+            <span class="espaco"></span>
+            <span class="cfg-mensagem" id="msgValores" role="status" aria-live="polite"></span>
+            <button class="botao botao-principal" type="button" id="btnSalvarValores">Salvar valores</button>
+          </div>
+        </section>
+
+        <!-- 4. Parâmetros do sistema (somente leitura) -->
+        <section class="painel" id="painelParametros">
+          <header class="painel-cab">
+            <div>
+              <h2>Parâmetros do sistema</h2>
+              <p>Valores fixos usados nos cálculos. São ajustados no código (<code>js/metrics.js</code>), não nesta tela.</p>
+            </div>
+          </header>
+          <div class="tabela-rolagem">
+            <table class="tabela-estreita">
+              <thead><tr><th>Parâmetro</th><th class="num">Valor</th><th>O que faz</th></tr></thead>
+              <tbody id="paramCorpo"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <footer class="rodape">
+          <span id="rodapeSync">—</span>
+          <span>CARISSIMI IoT · Projeto acadêmico de Governança de TI (SENAI)</span>
+        </footer>
+      </main>
+    </div>
+  </div>
+
+  <!-- Confirmação de "Limpar tudo" (valores) -->
+  <dialog id="dlgLimpar" class="dialogo">
+    <form method="dialog">
+      <h3>Limpar todos os valores?</h3>
+      <p class="dialogo-texto">Os quatro valores em R$/hora serão apagados do banco. Os cálculos financeiros voltam a mostrar "não calculado" até você preencher de novo.</p>
+      <div class="dialogo-botoes">
+        <span class="espaco"></span>
+        <button class="botao" type="button" id="btnCancelarLimpar">Cancelar</button>
+        <button class="botao botao-perigo" type="button" id="btnConfirmarLimpar">Sim, limpar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <!-- A ORDEM IMPORTA: conexão -> configuração da empresa -> cálculos -> demonstração -> script desta página -->
+  <script src="js/supabaseClient.js"></script>
+  <script src="js/configEmpresa.js"></script>
+  <script src="js/metrics.js"></script>
+  <script src="js/demoData.js"></script>
+  <script src="js/configuracoes.js"></script>
+</body>
+</html>

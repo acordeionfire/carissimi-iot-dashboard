@@ -1,15 +1,22 @@
 /* ============================================================
    dashboard.js — a TELA do dashboard
    - busca os dados no Supabase (equipamentos + historico_status)
+   - lê a configuração da empresa (turno, fuso, valores em R$)
    - escuta mudanças em tempo real (Realtime)
    - usa js/metrics.js para calcular e desenha tudo na página
+
+   v10 (ESPEC 05): régua do turno, horas extras, contador de
+   execuções, SEM SINAL, alertas só dentro do expediente e valores
+   em R$ guardados no banco. Nenhuma conta de tempo é feita aqui:
+   tudo vem de Metrics.calcularTudo().
 
    Dica: abra a página com  ?demo=1  para ver com dados fictícios.
    ============================================================ */
 (function () {
   'use strict';
 
-  const M = window.Metricas;
+  const M = window.Metricas; // é o mesmo objeto de window.Metrics
+  const C = window.ConfigEmpresa;
   const sb = window.supabaseClient;
   const MODO_DEMO = new URLSearchParams(location.search).get('demo') === '1';
 
@@ -17,17 +24,16 @@
      AJUSTES QUE VOCÊ PODE MUDAR
      ------------------------------------------------------------ */
   const LIMITES = {
-    esperaProlongadaMin: 60,   // alerta se ficar em ESPERA por mais que isso (minutos)
-    paradaProlongadaHoras: 2,  // alerta se ficar INATIVO por mais que isso, dentro do turno
-    utilizacaoBaixaPct: 20,    // alerta se a utilização do período ficar abaixo disso (considera as 24h do dia)
-    esperaAltaPct: 25,         // alerta se a espera passar disso do tempo monitorado
-    paradasPorDia: 6,          // alerta se a média de paradas por dia passar disso
-    minimoHorasParaAlertar: 1, // não alerta com menos que isso de dados no período
-    turno: { inicio: 7, fim: 18, dias: [1, 2, 3, 4, 5] }, // segunda a sexta, 7h às 18h
+    esperaProlongadaMin: 60,       // alerta se ficar em ESPERA por mais que isso, dentro do expediente (minutos)
+    paradaProlongadaHoras: 2,      // alerta se ficar INATIVO por mais que isso, dentro do expediente
+    disponibilidadeBaixaPct: 20,   // alerta se a Disponibilidade (OEE) do período ficar abaixo disso
+    esperaAltaPct: 25,             // alerta se a espera passar disso do tempo contado
+    paradasPorDia: 6,              // alerta se a média de paradas por dia de expediente passar disso
+    minimoHorasParaAlertar: 1,     // não alerta com menos que isso de dados no período
   };
   const INTERVALO_ATUALIZAR_TELA_MS = 30 * 1000;      // recalcula os tempos "há X min"
   const INTERVALO_RECARGA_COMPLETA_MS = 5 * 60 * 1000; // rede de segurança
-  const CHAVE_PARAMETROS = 'carrissimi.financeiro';
+  const ESPERA_REDESENHAR_MS = 300;                    // junta vários eventos seguidos num desenho só
 
   const PERIODOS = [
     { chave: 'hoje', rotulo: 'Hoje' },
@@ -40,36 +46,55 @@
 
   const COR = { ativo: '#3fcd63', espera: '#f3ba25', inativo: '#ed4042', semdados: '#7a8189' };
 
+  // Configuração usada no ?demo=1 enquanto o demoData.js não trouxer a dele (ESPEC 07).
+  const CONFIG_DEMO_TEMPORARIA = {
+    empresaId: 0,
+    fuso: 'America/Sao_Paulo',
+    horarios: [1, 2, 3, 4, 5].reduce((l, d) => l.concat([
+      { diaSemana: d, inicio: '07:00', fim: '12:00' }, { diaSemana: d, inicio: '13:00', fim: '17:00' },
+    ]), []),
+    financeiro: { custoOciosidadeHora: 60, custoOportunidadeHora: 180, valorCapacidadeHora: 220, custoOperacionalHora: 90, pecasPorExecucao: 1 },
+  };
+
   /* ------------------------------------------------------------
      ESTADO DA PÁGINA
      ------------------------------------------------------------ */
   const estado = {
     periodo: '7d',
-    custom: { de: null, ate: null },
+    custom: { de: null, ate: null }, // datas 'AAAA-MM-DD' no fuso da empresa
     empresa: null,
+    config: C.configPadrao(null),
+    configErro: null,
     equipamentos: [],
     eventos: {}, // { equipamento_id: [ { id, t, status } ] }
-    params: lerParametros(),
-    ordem: { campo: 'utilizacao', dir: 'asc' },
+    ordem: { campo: 'disponibilidade', dir: 'asc' },
     conexao: 'conectando',
     ultimaCarga: null,
     carregando: false,
     erro: null,
     statusVisto: {},
     demo: null,
+    recarregarDepois: false,
   };
 
   const graficos = {};
+  let temporizadorDesenho = null;
 
   /* ------------------------------------------------------------
      UTILITÁRIOS
      ------------------------------------------------------------ */
   const $ = (id) => document.getElementById(id);
+  const fuso = () => estado.config.fuso;
+  const dois = (n) => String(n).padStart(2, '0');
 
   function esc(texto) {
     return String(texto == null ? '' : texto).replace(/[&<>"']/g, (c) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     }[c]));
+  }
+
+  function clonar(x) {
+    return JSON.parse(JSON.stringify(x));
   }
 
   function formatarCnpj(cnpj) {
@@ -78,46 +103,28 @@
     return n.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
   }
 
-  function paraInputData(ts) {
-    const d = new Date(ts);
-    const dois = (n) => String(n).padStart(2, '0');
-    return d.getFullYear() + '-' + dois(d.getMonth() + 1) + '-' + dois(d.getDate());
-  }
-
-  function deInputData(texto, fimDoDia) {
-    const [a, m, d] = texto.split('-').map(Number);
-    return fimDoDia ? new Date(a, m - 1, d, 23, 59, 59, 999).getTime() : new Date(a, m - 1, d).getTime();
+  // 'AAAA-MM-DD' do dia (no fuso da empresa) em que cai o instante
+  function diaIso(ts) {
+    const p = M.partesLocais(ts, fuso());
+    return p.ano + '-' + dois(p.mes) + '-' + dois(p.dia);
   }
 
   function ehHoje(ts) {
-    return new Date(ts).toDateString() === new Date().toDateString();
+    return diaIso(ts) === diaIso(Date.now());
   }
 
   function horaOuData(ts) {
-    return ehHoje(ts) ? M.formatarHora(ts) : M.formatarDataHora(ts);
-  }
-
-  function lerParametros() {
-    const vazio = {};
-    M.PARAMETROS_FINANCEIROS.forEach((p) => (vazio[p.chave] = null));
-    try {
-      const salvo = JSON.parse(localStorage.getItem(CHAVE_PARAMETROS) || '{}');
-      M.PARAMETROS_FINANCEIROS.forEach((p) => {
-        const v = Number(salvo[p.chave]);
-        if (salvo[p.chave] !== null && salvo[p.chave] !== undefined && isFinite(v) && v >= 0) vazio[p.chave] = v;
-      });
-    } catch (e) { /* sem armazenamento: segue sem valores */ }
-    return vazio;
-  }
-
-  function salvarParametros(valores) {
-    estado.params = valores;
-    try { localStorage.setItem(CHAVE_PARAMETROS, JSON.stringify(valores)); } catch (e) { /* ignora */ }
+    return ehHoje(ts) ? M.formatarHoraFuso(ts, fuso()) : M.formatarDataHoraFuso(ts, fuso());
   }
 
   function periodoAtual(agora) {
-    return M.resolverPeriodo(estado.periodo, agora, estado.custom);
+    if (estado.periodo === 'custom') return M.periodoPersonalizado(estado.custom.de, estado.custom.ate, agora, fuso());
+    return M.periodoPreset(estado.periodo, agora, fuso());
   }
+
+  // rótulo e classe de cor de um estado (inclui o estado técnico sem_sinal)
+  const rotuloEstado = (est) => (est ? M.ROTULO_COMPLETO[est] : 'SEM DADOS');
+  const classeEstado = (est) => (est && est !== 'sem_sinal' ? est : 'semdados'); // SEM SINAL usa o visual neutro de "sem dados"
 
   const ICONES = {
     alerta: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
@@ -125,6 +132,7 @@
     queda: '<polyline points="22 17 13.5 8.5 8.5 13.5 2 7"/><polyline points="16 17 22 17 22 11"/>',
     info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
     ok: '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/>',
+    semsinal: '<path d="M2 8.82a15 15 0 0 1 20 0"/><path d="M5 12.86a10 10 0 0 1 3-2.03"/><path d="M16 10.83a10 10 0 0 1 3 2.03"/><path d="M8.5 16.43a5 5 0 0 1 7 0"/><path d="M12 20h.01"/><path d="m2 2 20 20"/>',
   };
   const icone = (nome) => '<svg viewBox="0 0 24 24" class="ico">' + ICONES[nome] + '</svg>';
 
@@ -145,26 +153,40 @@
     estado.empresa = estado.demo.empresa;
     estado.equipamentos = estado.demo.equipamentos;
     estado.eventos = indexarEventos(estado.demo.eventos);
+    estado.config = clonar(window.DemoData.DEMO_CONFIG || CONFIG_DEMO_TEMPORARIA);
+    estado.configErro = null;
   }
 
   async function carregarSupabase() {
     const agora = Date.now();
-    const p = periodoAtual(agora);
-    const ant = M.periodoAnterior(estado.periodo, p);
-    const desdeIso = new Date(Math.min(p.de, ant.de)).toISOString();
 
     const [rEquip, rEmp] = await Promise.all([
-      sb.from('equipamentos').select('id,empresa_id,nome,modelo,status_atual,atualizado_em').order('nome'),
-      sb.from('empresas').select('id,razao_social,nome_fantasia,cnpj').limit(1),
+      sb.from('equipamentos').select('id,empresa_id,nome,modelo,status_atual,atualizado_em,ultimo_sinal_em').order('nome'),
+      C.obterEmpresaAtual(sb),
     ]);
     if (rEquip.error) throw rEquip.error;
-    if (rEmp.error) throw rEmp.error;
+    if (!rEmp.ok) throw new Error(rEmp.erro);
+    estado.empresa = rEmp.dados;
+
+    // configuração da empresa (se falhar, segue com o padrão e avisa na tela)
+    if (estado.empresa) {
+      const rc = await C.carregarConfig(sb, estado.empresa.id, { forcar: true });
+      estado.config = rc.dados;
+      estado.configErro = rc.ok ? null : rc.erro;
+    } else {
+      estado.config = C.configPadrao(null);
+      estado.configErro = null;
+    }
+
+    const p = periodoAtual(agora);
+    const ant = M.periodoAnteriorMesmaDuracao(p);
+    const desdeIso = new Date(Math.min(p.de, ant.de)).toISOString();
 
     const equipamentos = rEquip.data || [];
     let linhas = [];
 
     if (equipamentos.length) {
-      // 1) todos os eventos desde o início da janela (busca em páginas de 1000)
+      // 1) todos os eventos de TODAS as máquinas desde o início da janela (busca em páginas de 1000)
       const TAMANHO = 1000;
       for (let inicio = 0; inicio < 30000; inicio += TAMANHO) {
         const r = await sb
@@ -196,7 +218,6 @@
       });
     }
 
-    estado.empresa = (rEmp.data && rEmp.data[0]) || null;
     estado.equipamentos = equipamentos;
     estado.eventos = indexarEventos(linhas);
   }
@@ -240,6 +261,12 @@
     el.querySelector('.led').className = 'led';
   }
 
+  // junta vários eventos seguidos num desenho só
+  function agendarDesenho() {
+    clearTimeout(temporizadorDesenho);
+    temporizadorDesenho = setTimeout(renderizar, ESPERA_REDESENHAR_MS);
+  }
+
   // Chamada quando chega um evento novo (do Realtime ou da demonstração)
   function aplicarEventoNovo(linha) {
     if (!linha || !linha.equipamento_id) return;
@@ -257,7 +284,29 @@
       equip.status_atual = linha.status;
       equip.atualizado_em = linha.registrado_em;
     }
-    renderizar();
+    agendarDesenho();
+  }
+
+  // O sinal periódico atualiza só ultimo_sinal_em (a cada ~1 min): isso NÃO pode redesenhar a tela toda nem fazer o cartão piscar.
+  function aplicarAtualizacaoEquipamento(novo) {
+    const equip = estado.equipamentos.find((e) => e.id === novo.id);
+    if (!equip) { carregar(true); return; }
+    const mudouStatus = equip.status_atual !== novo.status_atual;
+    Object.assign(equip, novo);
+    if (mudouStatus) agendarDesenho();
+    else atualizarSinalNaTela(equip);
+  }
+
+  function textoSinal(equip, agora) {
+    if (!equip.ultimo_sinal_em) return '';
+    const diferenca = Math.max(agora - Date.parse(equip.ultimo_sinal_em), 0);
+    return diferenca < 30 * 1000 ? 'Sinal: agora' : 'Sinal: há ' + M.formatarDuracao(diferenca);
+  }
+
+  function atualizarSinalNaTela(equip) {
+    document.querySelectorAll('[data-sinal]').forEach((el) => {
+      if (el.dataset.sinal === String(equip.id)) el.textContent = textoSinal(equip, Date.now());
+    });
   }
 
   function iniciarTempoReal() {
@@ -274,14 +323,11 @@
     if (!sb) { definirConexao('erro', 'Sem conexão'); return; }
 
     let jaConectou = false;
-    sb.channel('dashboard-carrissimi')
+    sb.channel('dashboard-carissimi')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'historico_status' },
         (payload) => aplicarEventoNovo(payload.new))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'equipamentos' }, (payload) => {
-        if (payload.eventType === 'UPDATE' && payload.new) {
-          const equip = estado.equipamentos.find((e) => e.id === payload.new.id);
-          if (equip) { Object.assign(equip, payload.new); renderizar(); return; }
-        }
+        if (payload.eventType === 'UPDATE' && payload.new) { aplicarAtualizacaoEquipamento(payload.new); return; }
         carregar(true); // equipamento criado, apagado ou desconhecido
       })
       .subscribe((status) => {
@@ -298,35 +344,79 @@
   }
 
   /* ------------------------------------------------------------
-     CÁLCULO GERAL (usa metrics.js)
+     CÁLCULO GERAL (tudo vem de metrics.js)
      ------------------------------------------------------------ */
-  function calcularTudo(agora) {
-    const p = periodoAtual(agora);
-    const ant = M.periodoAnterior(estado.periodo, p);
-    const situacoes = {};
-    const metricas = [];
-    const metricasAnt = [];
-
+  function eventosPlanos() {
+    const lista = [];
     for (const e of estado.equipamentos) {
-      const ev = estado.eventos[e.id] || [];
-      situacoes[e.id] = M.situacaoAtual(e, ev, agora);
-      metricas.push(M.calcularEquipamento(e, ev, p.de, p.ate, agora));
-      metricasAnt.push(M.calcularEquipamento(e, ev, ant.de, ant.ate, agora));
+      for (const ev of estado.eventos[e.id] || []) lista.push({ equipamento_id: e.id, status: ev.status, t: ev.t });
     }
+    return lista;
+  }
 
-    const resumo = M.resumoFrota(metricas);
+  // Situação de AGORA; se o último sinal está velho demais, vira SEM SINAL
+  function situacaoDe(e, agora) {
+    const sit = M.situacaoAtual(e, estado.eventos[e.id] || [], agora);
+    const us = e.ultimo_sinal_em ? Date.parse(e.ultimo_sinal_em) : null;
+    const tol = M.CONFIG_METRICAS.TOLERANCIA_SEM_SINAL_MS;
+    if (sit.estado !== 'sem_sinal' && us !== null && agora - us > tol) return { ...sit, estado: 'sem_sinal', desde: us + tol };
+    return sit;
+  }
+
+  function rotuloBucket(ts, duracao, passo) {
+    const p = M.partesLocais(ts, fuso());
+    const hora = dois(Math.floor(p.minutosDoDia / 60)) + 'h';
+    if (duracao <= 2 * M.DIA) return hora;
+    const dia = dois(p.dia) + '/' + dois(p.mes);
+    return passo < M.DIA ? dia + ' ' + hora : dia;
+  }
+
+  // Evolução no tempo (em % do tempo contado de cada trecho): ativo no turno, hora extra, espera e inativo
+  function serieEvolucao(res, p, quantidade) {
+    const duracao = Math.max(p.ate - p.de, 1);
+    const passo = duracao / quantidade;
+    const pontos = [];
+    for (let i = 0; i < quantidade; i++) {
+      const a = p.de + i * passo;
+      const ind = M.agregar(res.segmentos, { inicio: a, fim: a + passo });
+      const den = ind.denominadorMs;
+      const pct = (x) => (den > 0 ? +((x / den) * 100).toFixed(1) : null);
+      pontos.push({
+        rotulo: rotuloBucket(a, duracao, passo),
+        ativo: pct(ind.tempoAtivoDentroMs), extra: pct(ind.horasExtrasMs),
+        espera: pct(ind.tempoEsperaMs), inativo: pct(ind.tempoInativoMs),
+      });
+    }
+    return pontos;
+  }
+
+  function impactoDe(ind) {
+    return M.calcularFinanceiro(ind, estado.config.financeiro).impacto;
+  }
+
+  function calcularPagina(agora) {
+    const p = periodoAtual(agora);
+    const ant = M.periodoAnteriorMesmaDuracao(p);
+    const base = { eventos: eventosPlanos(), equipamentos: estado.equipamentos, config: estado.config, agora };
+    const res = M.calcularTudo({ ...base, periodo: p });
+    const resAnt = M.calcularTudo({ ...base, periodo: ant });
+
+    const situacoes = {};
+    for (const e of estado.equipamentos) situacoes[e.id] = situacaoDe(e, agora);
+    const lista = estado.equipamentos.map((e) => situacoes[e.id]);
+    const contagem = M.contarAgora(lista);
+    contagem.semSinal = lista.filter((s) => s.estado === 'sem_sinal').length;
+    contagem.semInfo -= contagem.semSinal; // SEM SINAL não é "sem informação"
+
     return {
-      agora, p, ant, situacoes, metricas,
-      resumo,
-      resumoAnt: M.resumoFrota(metricasAnt),
-      contagem: M.contarAgora(estado.equipamentos.map((e) => situacoes[e.id])),
-      serie: M.serieTemporal(metricas.map((m) => m.segmentos), p.de, p.ate, 12),
-      financeiro: M.calcularFinanceiro(resumo, estado.params),
-      cobertura: resumo.total
-        ? Math.min(100, ((resumo.monitoradoH * M.HORA) / ((p.ate - p.de) * resumo.total)) * 100)
-        : 0,
+      agora, p, ant, res, resAnt, situacoes, contagem,
+      total: res.total, totalAnt: resAnt.total,
+      financeiro: M.calcularFinanceiro(res.total, estado.config.financeiro),
+      serie: serieEvolucao(res, p, 12),
     };
   }
+
+  const temDados = (ind) => ind.denominadorMs > 0;
 
   /* ------------------------------------------------------------
      DESENHAR A TELA
@@ -334,9 +424,9 @@
   function renderizar() {
     const agora = Date.now();
     const principal = $('principal');
-    renderAviso();
 
     if (estado.erro || !estado.equipamentos.length) {
+      renderAviso(null);
       principal.classList.add('so-aviso');
       $('subtitulo').textContent = estado.carregando ? 'Carregando…' : 'Sem dados para mostrar';
       renderEmpresa();
@@ -345,7 +435,8 @@
     }
     principal.classList.remove('so-aviso');
 
-    const c = calcularTudo(agora);
+    const c = calcularPagina(agora);
+    renderAviso(c);
     renderEmpresa();
     renderPeriodos();
     renderCabecalho(c);
@@ -355,18 +446,19 @@
     renderCapacidade(c);
     renderAlertas(c);
     renderFinanceiro(c);
-    renderAtividade(c);
+    renderAtividade();
     renderGraficos(c);
     renderTabela(c);
     renderRodape();
   }
 
-  function renderAviso() {
+  function renderAviso(c) {
     const el = $('faixaAviso');
     let html = '';
     if (estado.carregando && !estado.ultimaCarga) return; // primeira carga: mantém "Carregando…"
 
     const botaoRecarregar = '<button type="button" class="botao" data-recarregar>Tentar novamente</button>';
+    const sufixoDemo = MODO_DEMO ? '?demo=1' : '';
 
     if (MODO_DEMO) {
       html += '<div class="aviso demo"><span><strong>Modo demonstração</strong> — os dados abaixo são fictícios e não vêm do Supabase.</span>' +
@@ -391,6 +483,31 @@
         'Se você já cadastrou equipamentos, confira se a tabela <code>equipamentos</code> permite leitura (RLS/policy de SELECT) para a chave anon.</span>' +
         '<a class="botao" href="?demo=1">Ver demonstração</a></div>';
     }
+
+    if (estado.configErro) {
+      html += '<div class="aviso erro"><span><strong>Não foi possível carregar a configuração da empresa;</strong> usando o padrão. ' + esc(estado.configErro) + '</span>' +
+        botaoRecarregar + '</div>';
+    }
+
+    if (c) {
+      if (c.res.semHorarioCadastrado) {
+        html += '<div class="aviso"><span><strong>Sem horário de funcionamento cadastrado:</strong> usando 24 h corridas ' +
+          '(noites e fins de semana entram na conta).</span><a class="botao" href="configuracoes.html' + sufixoDemo + '">Configurar</a></div>';
+      }
+      const dias = c.res.diasDesconsiderados;
+      if (dias.length) {
+        const lista = dias.slice(0, 5).map((d) => M.formatarDiaCurto(d.data)).join(', ') + (dias.length > 5 ? ' e mais ' + (dias.length - 5) : '');
+        html += '<div class="aviso"><span><strong>' + dias.length + (dias.length === 1 ? ' dia desconsiderado' : ' dias desconsiderados') +
+          ' do cálculo</strong> por não haver nenhum equipamento ligado: ' + esc(lista) + '.</span></div>';
+      }
+      const desc = c.res.avisos.statusDesconhecidos;
+      const chaves = Object.keys(desc);
+      if (chaves.length) {
+        const n = chaves.reduce((t, k) => t + desc[k], 0);
+        html += '<div class="aviso"><span><strong>' + n + (n === 1 ? ' registro ignorado' : ' registros ignorados') +
+          '</strong> por status desconhecido: ' + esc(chaves.join(', ')) + '.</span></div>';
+      }
+    }
     el.innerHTML = html;
   }
 
@@ -412,30 +529,32 @@
   }
 
   function sincronizarDatas() {
-    if (estado.custom.de) $('dataDe').value = paraInputData(estado.custom.de);
-    if (estado.custom.ate) $('dataAte').value = paraInputData(estado.custom.ate);
+    if (estado.custom.de) $('dataDe').value = estado.custom.de;
+    if (estado.custom.ate) $('dataAte').value = estado.custom.ate;
   }
 
   function renderCabecalho(c) {
     $('subtitulo').textContent =
-      'Visão geral da fábrica · ' + c.p.rotulo + ' (' + M.formatarDataHora(c.p.de) + ' → ' + M.formatarDataHora(c.p.ate) + ')';
+      'Visão geral da fábrica · ' + c.p.rotulo + ' (' + M.formatarDataHoraFuso(c.p.de, fuso()) + ' → ' + M.formatarDataHoraFuso(c.p.ate, fuso()) + ')';
   }
 
   /* ---------- KPIs ---------- */
 
+  // tipo: 'pp' (pontos percentuais), 'h' (horas) ou 'n' (quantidade)
   function delta(atual, anterior, temBase, tipo, maiorEhMelhor) {
     if (!temBase) return '<span class="delta neutro">sem base de comparação</span>';
     const diff = atual - anterior;
-    if (Math.abs(diff) < 0.05) return '<span class="delta neutro">■ estável vs. anterior</span>';
+    if (Math.abs(diff) < (tipo === 'n' ? 0.5 : 0.05)) return '<span class="delta neutro">■ estável vs. anterior</span>';
     const sobe = diff > 0;
     const bom = sobe === maiorEhMelhor;
-    const valor = Math.abs(diff).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-    const unidade = tipo === 'pp' ? ' p.p.' : ' h';
+    const casas = tipo === 'n' ? 0 : 1;
+    const valor = Math.abs(diff).toLocaleString('pt-BR', { minimumFractionDigits: casas, maximumFractionDigits: casas });
+    const unidade = tipo === 'pp' ? ' p.p.' : tipo === 'h' ? ' h' : '';
     return '<span class="delta ' + (bom ? 'bom' : 'ruim') + '">' + (sobe ? '▲ ' : '▼ ') + valor + unidade + ' vs. anterior</span>';
   }
 
-  function kpi(rotulo, valor, dica, cor, extra, anel) {
-    return '<div class="kpi">' +
+  function kpi(rotulo, valor, dica, cor, extra, anel, ajuda) {
+    return '<div class="kpi"' + (ajuda ? ' title="' + esc(ajuda) + '"' : '') + '>' +
       (anel || '') +
       '<div class="kpi-corpo"><p class="kpi-rotulo">' + rotulo + '</p>' +
       '<p class="kpi-valor ' + (cor || '') + '">' + valor + '</p>' +
@@ -446,71 +565,92 @@
     return '<div class="anel" style="--p:' + Math.max(0, Math.min(100, pct)).toFixed(1) + ';--cor:' + cor + '" aria-hidden="true"></div>';
   }
 
+  const pct100 = (razao) => (razao === null ? 0 : razao * 100);
+
   function renderKpis(c) {
-    const r = c.resumo;
-    const a = c.resumoAnt;
+    const r = c.total;
+    const a = c.totalAnt;
     const n = c.contagem;
+    const base = temDados(r) && temDados(a);
+
+    const dicaFrota = [];
+    if (n.semSinal) dicaFrota.push(n.semSinal + ' sem sinal');
+    if (n.semInfo) dicaFrota.push(n.semInfo + ' sem informação de estado');
 
     $('kpisAgora').innerHTML =
-      kpi('Equipamentos monitorados', String(r.total),
-        n.semInfo ? n.semInfo + ' sem informação de estado' : 'Tornos cadastrados com CLP') +
-      kpi('Ativos agora', String(n.ativo), 'de ' + r.total + ' equipamentos', 'cor-ativo') +
+      kpi('Equipamentos monitorados', String(estado.equipamentos.length),
+        dicaFrota.length ? dicaFrota.join(' · ') : 'Tornos cadastrados com CLP') +
+      kpi('Ativos agora', String(n.ativo), 'de ' + estado.equipamentos.length + ' equipamentos', 'cor-ativo') +
       kpi('Em espera agora', String(n.espera), 'ligados, sem produzir', 'cor-espera') +
       kpi('Inativos agora', String(n.inativo), 'parados / desligados', 'cor-inativo');
 
-    const semDados = !r.temDados;
+    const semDados = !temDados(r);
+    const execMedio = r.tempoMedioExecucaoMs === null ? 'sem execuções no período' : 'Tempo médio: ' + M.formatarDuracao(r.tempoMedioExecucaoMs);
+
     $('kpisPeriodo').innerHTML =
-      kpi('Utilização', semDados ? '—' : M.formatarPct(r.utilizacaoPct), 'Tempo efetivamente ativo', 'cor-ativo',
-        delta(r.utilizacaoPct, a.utilizacaoPct, r.temDados && a.temDados, 'pp', true),
-        anel(semDados ? 0 : r.utilizacaoPct, COR.ativo)) +
-      kpi('Disponibilidade', semDados ? '—' : M.formatarPct(r.disponibilidadePct), 'Ativo + espera (máquina ligada)', 'cor-primaria',
-        delta(r.disponibilidadePct, a.disponibilidadePct, r.temDados && a.temDados, 'pp', true),
-        anel(semDados ? 0 : r.disponibilidadePct, '#19d1d2')) +
-      kpi('Tempo produtivo', M.formatarHoras(r.ativoH), 'de ' + M.formatarHoras(r.monitoradoH) + ' monitoradas', 'cor-ativo',
-        delta(r.ativoH, a.ativoH, r.temDados && a.temDados, 'h', true)) +
-      kpi('Tempo improdutivo', M.formatarHoras(r.improdutivoH), 'Espera + inatividade', 'cor-inativo',
-        delta(r.improdutivoH, a.improdutivoH, r.temDados && a.temDados, 'h', false));
+      kpi('Disponibilidade (OEE)', semDados ? '—' : M.formatarPct(pct100(r.disponibilidadeOEE)), 'Tempo produzindo ÷ tempo programado', 'cor-ativo',
+        delta(pct100(r.disponibilidadeOEE), pct100(a.disponibilidadeOEE), base, 'pp', true),
+        anel(semDados ? 0 : pct100(r.disponibilidadeOEE), COR.ativo),
+        'Tempo produzindo ÷ tempo programado. Inclui o ATIVO fora do horário (hora extra). Este sistema mede só a Disponibilidade, o primeiro componente do OEE.') +
+      kpi('Máquina ligada', semDados ? '—' : M.formatarPct(pct100(r.maquinaLigada)), 'Ativo + espera ÷ tempo programado', 'cor-primaria',
+        delta(pct100(r.maquinaLigada), pct100(a.maquinaLigada), base, 'pp', true),
+        anel(semDados ? 0 : pct100(r.maquinaLigada), '#19d1d2'),
+        'Tempo com a máquina ligada (ativo + espera) ÷ tempo programado.') +
+      kpi('Tempo produtivo', M.formatarHoras(r.tempoProdutivoMs / M.HORA), 'de ' + M.formatarHoras(r.denominadorMs / M.HORA) + ' contadas', 'cor-ativo',
+        delta(r.tempoProdutivoMs / M.HORA, a.tempoProdutivoMs / M.HORA, base, 'h', true)) +
+      kpi('Tempo improdutivo', M.formatarHoras(r.tempoImprodutivoMs / M.HORA), 'Espera + inatividade no horário', 'cor-inativo',
+        delta(r.tempoImprodutivoMs / M.HORA, a.tempoImprodutivoMs / M.HORA, base, 'h', false)) +
+      kpi('Execuções', String(r.execucoes), execMedio, 'cor-primaria',
+        delta(r.execucoes, a.execucoes, base, 'n', true), '',
+        'Quantas vezes a máquina passou a ATIVO no período. É uma REFERÊNCIA para estimar peças, não uma contagem de peças: uma peça pode gerar mais de uma execução e uma execução pode gerar várias peças.') +
+      kpi('Horas extras produtivas', M.formatarHoras(r.horasExtrasMs / M.HORA), 'Produção fora do horário', 'cor-ativo',
+        delta(r.horasExtrasMs / M.HORA, a.horasExtrasMs / M.HORA, base, 'h', true), '',
+        'ATIVO fora do horário de funcionamento (a partir de ' + M.formatarDuracao(M.CONFIG_METRICAS.MIN_HORA_EXTRA_MS) + ' contínuos).');
   }
 
   /* ---------- Cartões das máquinas ---------- */
 
-  function seloEstado(estadoAtual) {
-    const k = estadoAtual || 'semdados';
-    const rot = estadoAtual ? M.ROTULO[estadoAtual] : 'SEM DADOS';
-    return '<span class="selo est-' + k + '"><span class="led led-' + k + '"></span>' + rot + '</span>';
+  function seloEstado(est) {
+    const k = classeEstado(est);
+    return '<span class="selo est-' + k + '"><span class="led led-' + k + '"></span>' + rotuloEstado(est) + '</span>';
   }
 
   function renderMaquinas(c) {
     const cartoes = estado.equipamentos.map((e) => {
       const sit = c.situacoes[e.id];
-      const m = c.metricas.find((x) => x.equip.id === e.id);
-      const k = sit.estado || 'semdados';
+      const ind = c.res.porEquipamento[e.id];
+      const k = classeEstado(sit.estado);
       const mudou = estado.statusVisto[e.id] !== undefined && estado.statusVisto[e.id] !== sit.estado;
       estado.statusVisto[e.id] = sit.estado;
+      const t = temDados(ind);
 
       const tempo = sit.desde
         ? '<strong>' + M.formatarDuracao(c.agora - sit.desde) + '</strong><span>neste estado desde ' + horaOuData(sit.desde) + '</span>'
         : '<strong>—</strong><span>sem registro de mudança de estado</span>';
 
-      const barra = m.temDados
+      const den = ind.denominadorMs || 1;
+      const barra = t
         ? '<div class="barra-empilhada" title="Composição do período">' +
-          '<i class="b-ativo" style="width:' + m.pctAtivo + '%"></i>' +
-          '<i class="b-espera" style="width:' + m.pctEspera + '%"></i>' +
-          '<i class="b-inativo" style="width:' + m.pctInativo + '%"></i></div>'
+          '<i class="b-ativo" style="width:' + (ind.tempoAtivoTotalMs / den) * 100 + '%"></i>' +
+          '<i class="b-espera" style="width:' + (ind.tempoEsperaMs / den) * 100 + '%"></i>' +
+          '<i class="b-inativo" style="width:' + (ind.tempoInativoMs / den) * 100 + '%"></i></div>'
         : '<div class="barra-empilhada"></div>';
 
-      const dados = m.temDados
+      const dados = t
         ? '<dl class="maquina-dados">' +
-          '<div><dt>Utilização</dt><dd class="cor-ativo">' + M.formatarPct(m.pctAtivo) + '</dd></div>' +
-          '<div><dt>Ativo</dt><dd>' + M.formatarHoras(m.ativoMs / M.HORA) + '</dd></div>' +
-          '<div><dt>Paradas</dt><dd>' + m.paradas + '</dd></div></dl>'
-        : '<p class="maquina-rodape">Sem dados neste período.</p>';
+          '<div><dt>Disp. (OEE)</dt><dd class="cor-ativo">' + M.formatarPct(pct100(ind.disponibilidadeOEE)) + '</dd></div>' +
+          '<div><dt>Execuções</dt><dd>' + ind.execucoes + '</dd></div>' +
+          '<div><dt>Paradas</dt><dd>' + ind.paradas + '</dd></div></dl>' +
+          '<p class="maquina-rodape">Ativo ' + M.formatarHoras(ind.tempoAtivoTotalMs / M.HORA) +
+          (ind.tempoMedioExecucaoMs !== null ? ' · Tempo médio/exec.: ' + M.formatarDuracao(ind.tempoMedioExecucaoMs) : '') + '</p>'
+        : '<p class="maquina-rodape">Sem dados dentro do horário neste período.</p>';
 
       return '<article class="maquina est-' + k + (mudou ? ' piscar' : '') + '">' +
         '<header class="maquina-cab"><div><p class="maquina-nome">' + esc(e.nome) + '</p>' +
         '<p class="maquina-modelo">' + esc(e.modelo || 'modelo não informado') + '</p></div>' + seloEstado(sit.estado) + '</header>' +
         '<div class="maquina-tempo">' + tempo + '</div>' + barra + dados +
-        '<p class="maquina-rodape">Última atualização: ' + (sit.ultimaAtualizacao ? M.formatarDataHora(sit.ultimaAtualizacao) : '—') + '</p>' +
+        '<p class="maquina-rodape">Última atualização: ' + (sit.ultimaAtualizacao ? M.formatarDataHoraFuso(sit.ultimaAtualizacao, fuso()) : '—') +
+        (e.ultimo_sinal_em ? ' · <span data-sinal="' + esc(e.id) + '">' + esc(textoSinal(e, c.agora)) + '</span>' : '') + '</p>' +
         '</article>';
     });
     $('maquinas').innerHTML = cartoes.join('');
@@ -521,21 +661,23 @@
   function renderLinhaTempo(c) {
     const { de, ate } = c.p;
     const duracao = Math.max(ate - de, 1);
-    const linhas = c.metricas.map((m) => {
-      const segs = m.segmentos.map((s) => {
+    const linhas = estado.equipamentos.map((e) => {
+      const segs = c.res.segmentos.filter((s) => String(s.equipamentoId) === String(e.id)).map((s) => {
         const esq = ((s.inicio - de) / duracao) * 100;
         const larg = ((s.fim - s.inicio) / duracao) * 100;
-        const dica = M.ROTULO[s.estado] + ' · ' + M.formatarDataHora(s.inicio) + ' → ' + M.formatarDataHora(s.fim) +
-          ' (' + M.formatarDuracao(s.fim - s.inicio) + ')';
-        return '<div class="lt-seg b-' + s.estado + '" style="left:' + esq.toFixed(3) + '%;width:' + larg.toFixed(3) + '%" title="' + dica + '"></div>';
+        const extra = s.estado === 'ativo' && !s.dentroTurno;
+        const dica = rotuloEstado(s.estado) + (extra ? ' (hora extra)' : '') + ' · ' + M.formatarDataHoraFuso(s.inicio, fuso()) + ' → ' +
+          M.formatarDataHoraFuso(s.fim, fuso()) + ' (' + M.formatarDuracao(s.fim - s.inicio) + ')';
+        const classe = s.estado === 'sem_sinal' ? 'b-semdados' : 'b-' + s.estado;
+        return '<div class="lt-seg ' + classe + (extra ? ' fora-turno' : '') + '" style="left:' + esq.toFixed(3) + '%;width:' + larg.toFixed(3) + '%" title="' + esc(dica) + '"></div>';
       }).join('');
-      return '<div class="lt-nome" title="' + esc(m.equip.nome) + '">' + esc(m.equip.nome) + '</div><div class="lt-faixa">' + segs + '</div>';
+      return '<div class="lt-nome" title="' + esc(e.nome) + '">' + esc(e.nome) + '</div><div class="lt-faixa">' + segs + '</div>';
     }).join('');
 
     const marcas = [];
     for (let i = 0; i <= 5; i++) {
       const ts = de + (duracao * i) / 5;
-      const rot = duracao <= 2 * M.DIA ? M.formatarHora(ts) : M.formatarDataHora(ts).split(' ')[0];
+      const rot = duracao <= 2 * M.DIA ? M.formatarHoraFuso(ts, fuso()) : M.formatarDataHoraFuso(ts, fuso()).split(' ')[0];
       marcas.push('<span style="left:' + i * 20 + '%">' + rot + '</span>');
     }
     $('linhaTempo').innerHTML = '<div class="linha-tempo">' + linhas +
@@ -544,8 +686,8 @@
 
   /* ---------- Capacidade ---------- */
 
-  function passo(rotulo, valor, pct, classe) {
-    return '<div><div class="passo-topo"><span>' + rotulo + '</span><span>' + M.formatarHoras(valor) + ' · ' + M.formatarPct(pct) + '</span></div>' +
+  function passo(rotulo, valorH, pct, classe) {
+    return '<div><div class="passo-topo"><span>' + rotulo + '</span><span>' + M.formatarHoras(valorH) + ' · ' + M.formatarPct(pct) + '</span></div>' +
       '<div class="trilho"><i class="' + classe + '" style="width:' + Math.min(pct, 100) + '%"></i></div></div>';
   }
 
@@ -554,78 +696,109 @@
   }
 
   function renderCapacidade(c) {
-    const r = c.resumo;
-    if (!r.temDados) {
-      $('capacidade').innerHTML = '<p class="estado-vazio">Ainda não há registros de estado neste período.</p>';
+    const r = c.total;
+    if (!temDados(r)) {
+      $('capacidade').innerHTML = '<p class="estado-vazio">Ainda não há registros de estado dentro do horário neste período.</p>';
       return;
     }
-    const ociosaH = r.esperaH + r.inativoH;
+    const h = (ms) => ms / M.HORA;
+    const den = r.denominadorMs;
+    const ociosa = r.tempoImprodutivoMs;
     $('capacidade').innerHTML =
       '<div class="passos">' +
-      passo('Capacidade disponível', r.monitoradoH, 100, 'b-primaria') +
-      passo('Capacidade utilizada', r.ativoH, r.utilizacaoPct, 'b-ativo') +
-      passo('Capacidade ociosa', ociosaH, r.ociosaPct, 'b-inativo') +
-      '<div><p class="subtitulo-mini">Composição do tempo monitorado</p>' +
+      passo('Capacidade disponível', h(den), 100, 'b-primaria') +
+      passo('Capacidade utilizada', h(r.tempoAtivoTotalMs), (r.tempoAtivoTotalMs / den) * 100, 'b-ativo') +
+      passo('Capacidade ociosa', h(ociosa), (ociosa / den) * 100, 'b-inativo') +
+      '<div><p class="subtitulo-mini">Composição do tempo contado</p>' +
       '<div class="barra-empilhada" style="margin-top:0;height:12px">' +
-      '<i class="b-ativo" style="width:' + r.ativoH / r.monitoradoH * 100 + '%" title="Ativo"></i>' +
-      '<i class="b-espera" style="width:' + r.esperaH / r.monitoradoH * 100 + '%" title="Espera"></i>' +
-      '<i class="b-inativo" style="width:' + r.inativoH / r.monitoradoH * 100 + '%" title="Inativo"></i></div>' +
-      '<p class="alerta-detalhe" style="margin-top:6px">Base de cálculo: só o tempo com registro do CLP — cobre ' +
-      M.formatarPct(c.cobertura, 0) + ' do período.</p></div></div>' +
+      '<i class="b-ativo" style="width:' + (r.tempoAtivoTotalMs / den) * 100 + '%" title="Ativo"></i>' +
+      '<i class="b-espera" style="width:' + (r.tempoEsperaMs / den) * 100 + '%" title="Espera"></i>' +
+      '<i class="b-inativo" style="width:' + (r.tempoInativoMs / den) * 100 + '%" title="Inativo"></i></div>' +
+      '<p class="alerta-detalhe" style="margin-top:6px">Base de cálculo: só o tempo com registro do CLP dentro do horário de funcionamento' +
+      (r.coberturaDados === null ? '.' : ' — cobre ' + M.formatarPct(r.coberturaDados * 100, 0) + ' do horário programado.') + '</p></div></div>' +
       '<div class="itens-2">' +
-      itemCap('Horas ativas', M.formatarHoras(r.ativoH), 'cor-ativo') +
-      itemCap('Horas em espera', M.formatarHoras(r.esperaH), 'cor-espera') +
-      itemCap('Horas inativas', M.formatarHoras(r.inativoH), 'cor-inativo') +
-      itemCap('Capacidade não utilizada', M.formatarPct(r.ociosaPct), 'cor-inativo') + '</div>';
+      itemCap('Horas ativas', M.formatarHoras(h(r.tempoAtivoTotalMs)), 'cor-ativo') +
+      itemCap('Horas em espera', M.formatarHoras(h(r.tempoEsperaMs)), 'cor-espera') +
+      itemCap('Horas inativas', M.formatarHoras(h(r.tempoInativoMs)), 'cor-inativo') +
+      itemCap('Capacidade não utilizada', M.formatarPct((ociosa / den) * 100), 'cor-inativo') + '</div>';
   }
 
   /* ---------- Alertas ---------- */
 
-  function dentroDoTurno(ts) {
-    const d = new Date(ts);
-    return LIMITES.turno.dias.includes(d.getDay()) && d.getHours() >= LIMITES.turno.inicio && d.getHours() < LIMITES.turno.fim;
+  // Faixas de turno entre dois instantes (para medir "há quanto tempo, DENTRO do expediente").
+  // Sem horário cadastrado: 24 h corridas. Dias desconsiderados (já detectados) ficam de fora.
+  function faixasParaAlerta(desde, agora, c) {
+    if (!estado.config.horarios.length) return [{ inicio: desde, fim: agora }];
+    const fora = new Set(c.res.diasDesconsiderados.map((d) => d.data));
+    return M.faixasDoTurno(estado.config, { de: desde, ate: agora }).filter((f) => !fora.has(f.data));
+  }
+
+  function minutosDeExpediente(sit, agora, c) {
+    if (!sit.desde) return 0;
+    return M.tempoNoEstadoNoExpedienteMs([{ inicio: sit.desde, fim: agora }], faixasParaAlerta(sit.desde, agora, c), agora);
   }
 
   function montarAlertas(c) {
     const lista = [];
-    const dias = Math.max((c.p.ate - c.p.de) / M.DIA, 1);
+    const dentro = M.estaNoExpediente(c.agora, estado.config);
+    const diasComTurno = estado.config.horarios.length
+      ? Math.max(new Set(c.res.faixasValidas.map((f) => f.data)).size, 1)
+      : Math.max((c.p.ate - c.p.de) / M.DIA, 1);
 
-    for (const m of c.metricas) {
-      const nome = m.equip.nome;
-      const sit = c.situacoes[m.equip.id];
-      const naoProduz = sit.desde ? c.agora - sit.desde : 0;
+    for (const e of estado.equipamentos) {
+      const nome = e.nome;
+      const sit = c.situacoes[e.id];
+      const ind = c.res.porEquipamento[e.id];
 
-      if (sit.estado === 'espera' && naoProduz > LIMITES.esperaProlongadaMin * M.MIN) {
+      if (sit.estado === 'sem_sinal') {
+        lista.push({ sev: 'atencao', ico: 'semsinal', titulo: nome + ' sem sinal',
+          detalhe: 'Sem comunicação com o equipamento' + (sit.desde ? ' desde ' + horaOuData(sit.desde) : '') + '. Esse tempo fica fora dos cálculos.',
+          limite: 'tolerância: ' + M.formatarDuracao(M.CONFIG_METRICAS.TOLERANCIA_SEM_SINAL_MS) });
+      }
+
+      const noExpediente = dentro && (sit.estado === 'espera' || sit.estado === 'inativo') ? minutosDeExpediente(sit, c.agora, c) : 0;
+      if (sit.estado === 'espera' && noExpediente > LIMITES.esperaProlongadaMin * M.MIN) {
         lista.push({ sev: 'atencao', ico: 'pausa', titulo: nome + ' em espera prolongada',
-          detalhe: 'Ligado e sem produzir há ' + M.formatarDuracao(naoProduz) + '.',
+          detalhe: 'Ligado e sem produzir há ' + M.formatarDuracao(noExpediente) + ' de expediente.',
           limite: 'limite: ' + LIMITES.esperaProlongadaMin + ' min' });
       }
-      if (sit.estado === 'inativo' && naoProduz > LIMITES.paradaProlongadaHoras * M.HORA && dentroDoTurno(c.agora)) {
-        lista.push({ sev: 'critico', ico: 'alerta', titulo: nome + ' parado em horário de turno',
-          detalhe: 'Inativo há ' + M.formatarDuracao(naoProduz) + '.',
-          limite: 'limite: ' + LIMITES.paradaProlongadaHoras + ' h · turno ' + LIMITES.turno.inicio + 'h–' + LIMITES.turno.fim + 'h' });
+      if (sit.estado === 'inativo' && noExpediente > LIMITES.paradaProlongadaHoras * M.HORA) {
+        lista.push({ sev: 'critico', ico: 'alerta', titulo: nome + ' desligado em horário de expediente',
+          detalhe: 'Inativo há ' + M.formatarDuracao(noExpediente) + ' de expediente (pode indicar baixa demanda ou manutenção).',
+          limite: 'limite: ' + LIMITES.paradaProlongadaHoras + ' h' });
       }
-      if (!m.temDados) {
+
+      if (c.res.avisos.equipamentosSemRegistros.indexOf(e.id) >= 0 || !temDados(ind)) {
         lista.push({ sev: 'info', ico: 'info', titulo: nome + ' sem registros no período',
-          detalhe: 'Nenhuma mudança de estado recebida do CLP nesta janela.', limite: '' });
+          detalhe: 'Nenhum registro do CLP dentro do horário nesta janela.', limite: '' });
         continue;
       }
-      if (m.monitoradoMs < LIMITES.minimoHorasParaAlertar * M.HORA) continue;
+      if (ind.tempoMonitoradoDentroMs < LIMITES.minimoHorasParaAlertar * M.HORA) continue;
 
-      if (m.pctAtivo < LIMITES.utilizacaoBaixaPct) {
-        lista.push({ sev: 'atencao', ico: 'queda', titulo: nome + ' com utilização baixa',
-          detalhe: 'Utilização de ' + M.formatarPct(m.pctAtivo) + ' no período.', limite: 'limite: ' + LIMITES.utilizacaoBaixaPct + '%' });
+      const disp = pct100(ind.disponibilidadeOEE);
+      if (disp < LIMITES.disponibilidadeBaixaPct) {
+        lista.push({ sev: 'atencao', ico: 'queda', titulo: nome + ' com disponibilidade baixa',
+          detalhe: 'Disponibilidade (OEE) de ' + M.formatarPct(disp) + ' no período.', limite: 'limite: ' + LIMITES.disponibilidadeBaixaPct + '%' });
       }
-      if (m.pctEspera > LIMITES.esperaAltaPct) {
+      const esperaPct = (ind.tempoEsperaMs / ind.denominadorMs) * 100;
+      if (esperaPct > LIMITES.esperaAltaPct) {
         lista.push({ sev: 'atencao', ico: 'alerta', titulo: nome + ' com muito tempo em espera',
-          detalhe: M.formatarPct(m.pctEspera) + ' do período em espera.', limite: 'limite: ' + LIMITES.esperaAltaPct + '%' });
+          detalhe: M.formatarPct(esperaPct) + ' do período em espera.', limite: 'limite: ' + LIMITES.esperaAltaPct + '%' });
       }
-      if (m.paradas / dias > LIMITES.paradasPorDia) {
+      if (ind.paradas / diasComTurno > LIMITES.paradasPorDia) {
         lista.push({ sev: 'atencao', ico: 'pausa', titulo: nome + ' com muitas paradas',
-          detalhe: m.paradas + ' paradas (' + (m.paradas / dias).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + ' por dia).',
+          detalhe: ind.paradas + ' paradas (' + (ind.paradas / diasComTurno).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + ' por dia de expediente).',
           limite: 'limite: ' + LIMITES.paradasPorDia + ' por dia' });
       }
     }
+
+    const desc = c.res.avisos.statusDesconhecidos;
+    const chaves = Object.keys(desc);
+    if (chaves.length) {
+      lista.push({ sev: 'info', ico: 'info', titulo: 'Registros com status desconhecido',
+        detalhe: chaves.map((k) => k + ' (' + desc[k] + ')').join(', ') + ' foram ignorados.', limite: '' });
+    }
+
     const peso = { critico: 0, atencao: 1, info: 2 };
     return lista.sort((a, b) => peso[a.sev] - peso[b.sev]);
   }
@@ -646,44 +819,48 @@
 
   /* ---------- Financeiro ---------- */
 
+  function rotuloParametro(chave) {
+    const p = M.PARAMETROS_FINANCEIROS_V10.find((x) => x.chave === chave);
+    return p ? p.rotulo : chave;
+  }
+
   function renderFinanceiro(c) {
-    const r = c.resumo;
-    const p = estado.params;
+    const r = c.total;
+    const fin = c.financeiro;
+    const den = r.denominadorMs;
+    const semDados = !temDados(r);
 
     // máquina com maior perda (impacto em R$ se configurado; senão, mais horas improdutivas)
-    const ranking = c.metricas
-      .filter((m) => m.temDados)
-      .map((m) => ({ m, impacto: M.impactoEquipamento(m, p) }))
-      .sort((x, y) => x.impacto !== null && y.impacto !== null
-        ? y.impacto - x.impacto
-        : (y.m.esperaMs + y.m.inativoMs) - (x.m.esperaMs + x.m.inativoMs));
+    const ranking = estado.equipamentos
+      .map((e) => ({ e, ind: c.res.porEquipamento[e.id] }))
+      .filter((x) => temDados(x.ind))
+      .map((x) => ({ ...x, impacto: impactoDe(x.ind) }))
+      .sort((x, y) => (x.impacto !== null && y.impacto !== null ? y.impacto - x.impacto : y.ind.tempoImprodutivoMs - x.ind.tempoImprodutivoMs));
     const pior = ranking[0];
 
     const respostas =
       '<div class="respostas">' +
-      '<div class="resposta"><p>Quanto estamos utilizando?</p><p class="valor cor-ativo">' + (r.temDados ? M.formatarPct(r.utilizacaoPct) : '—') + '</p><p class="dica">' + M.formatarHoras(r.ativoH) + ' produtivas</p></div>' +
-      '<div class="resposta"><p>Quanto deixamos de utilizar?</p><p class="valor cor-inativo">' + (r.temDados ? M.formatarPct(r.ociosaPct) : '—') + '</p><p class="dica">' + M.formatarHoras(r.improdutivoH) + ' improdutivas</p></div>' +
-      '<div class="resposta"><p>Horas paradas (inativo)</p><p class="valor cor-inativo">' + M.formatarHoras(r.inativoH) + '</p><p class="dica">' + M.formatarHoras(r.esperaH) + ' em espera</p></div>' +
-      '<div class="resposta"><p>Maior concentração de perdas</p><p class="valor cor-espera" style="font-size:16px;overflow-wrap:anywhere">' + (pior ? esc(pior.m.equip.nome) : '—') + '</p>' +
-      '<p class="dica">' + (pior ? M.formatarPct(pior.m.pctAtivo) + ' de utilização' : '') + '</p></div></div>';
+      '<div class="resposta"><p>Quanto estamos produzindo?</p><p class="valor cor-ativo">' + (semDados ? '—' : M.formatarPct(pct100(r.disponibilidadeOEE))) + '</p><p class="dica">' + M.formatarHoras(r.tempoProdutivoMs / M.HORA) + ' produtivas</p></div>' +
+      '<div class="resposta"><p>Quanto deixamos de produzir?</p><p class="valor cor-inativo">' + (semDados ? '—' : M.formatarPct((r.tempoImprodutivoMs / den) * 100)) + '</p><p class="dica">' + M.formatarHoras(r.tempoImprodutivoMs / M.HORA) + ' improdutivas</p></div>' +
+      '<div class="resposta"><p>Horas desligadas no expediente</p><p class="valor cor-inativo">' + M.formatarHoras(r.tempoInativoMs / M.HORA) + '</p><p class="dica">' + M.formatarHoras(r.tempoEsperaMs / M.HORA) + ' em espera</p></div>' +
+      '<div class="resposta"><p>Maior concentração de perdas</p><p class="valor cor-espera" style="font-size:16px;overflow-wrap:anywhere">' + (pior ? esc(pior.e.nome) : '—') + '</p>' +
+      '<p class="dica">' + (pior ? M.formatarPct(pct100(pior.ind.disponibilidadeOEE)) + ' de disponibilidade' : '') + '</p></div></div>';
 
-    // impacto total = ociosidade + parada (só o que estiver configurado)
-    const ocio = c.financeiro.find((f) => f.chave === 'ociosidade');
-    const par = c.financeiro.find((f) => f.chave === 'parada');
-    const partes = [ocio.valor, par.valor].filter((v) => v !== null);
-    const totalLinha = partes.length
-      ? '<li class="fin-linha" style="border-color:rgba(243,186,37,.45);background:rgba(243,186,37,.06)"><div><p class="nome"><strong>Impacto estimado total</strong></p><p class="formula">ociosidade + parada</p></div>' +
-        '<span class="valor">' + M.formatarMoeda(partes.reduce((t, v) => t + v, 0)) + '<small>estimado</small></span></li>'
+    const totalLinha = fin.impacto !== null
+      ? '<li class="fin-linha" style="border-color:rgba(243,186,37,.45);background:rgba(243,186,37,.06)"><div><p class="nome"><strong>Impacto estimado total</strong></p><p class="formula">ociosidade + oportunidade' + (fin.parcial ? ' (parcial: falta um valor)' : '') + '</p></div>' +
+        '<span class="valor">' + M.formatarMoeda(fin.impacto) + '<small>estimado</small></span></li>'
       : '';
 
-    const linhas = c.financeiro.map((f) =>
-      '<li class="fin-linha"><div><p class="nome">' + f.rotulo + '</p><p class="formula">' + f.formula + '</p></div>' +
+    const linhas = fin.itens.map((f) =>
+      '<li class="fin-linha"><div><p class="nome">' + esc(f.rotulo) + '</p><p class="formula">' + esc(f.formula) + '</p></div>' +
       (f.valor === null
-        ? '<div class="fin-faltando"><b>não calculado</b>necessita: ' + esc(f.faltando) + '</div>'
+        ? '<div class="fin-faltando"><b>não calculado</b>necessita: ' + esc(rotuloParametro(f.faltando)) + '</div>'
         : '<span class="valor">' + M.formatarMoeda(f.valor) + '<small>estimado</small></span>') + '</li>'
     ).join('');
 
-    $('financeiro').innerHTML = respostas + '<ul class="lista-fin">' + totalLinha + linhas + '</ul>';
+    $('financeiro').innerHTML = respostas + '<ul class="lista-fin">' + totalLinha + linhas + '</ul>' +
+      '<p class="alerta-detalhe" style="margin-top:10px">Custo de oportunidade: só é perda real se havia demanda; em baixa demanda a margem não existiria. ' +
+      'Todos os valores são estimativas médias por hora, calculadas só com o tempo dentro do horário.</p>';
   }
 
   /* ---------- Atividade recente ---------- */
@@ -705,7 +882,7 @@
       $('atividade').innerHTML = '<p class="estado-vazio">Nenhuma mudança de estado registrada ainda.</p>';
       return;
     }
-    const chip = (est) => '<b class="cor-' + est + '">' + M.ROTULO[est] + '</b>';
+    const chip = (est) => '<b class="' + (est === 'sem_sinal' ? 'cor-suave' : 'cor-' + est) + '">' + rotuloEstado(est) + '</b>';
     $('atividade').innerHTML = '<ul class="feed">' + recentes.map((i) =>
       '<li><time>' + horaOuData(i.t) + '</time><div><p class="quem">' + esc(i.nome) + '</p>' +
       '<p class="oque">' + (i.de ? chip(i.de) + '<span class="seta">→</span>' : '') + chip(i.para) + '</p></div></li>'
@@ -743,9 +920,12 @@
     g.update('none');
   }
 
+  const COR_EXTRA = COR.ativo + '99'; // hora extra = o verde do ativo, mais suave
+
   function renderGraficos(c) {
-    const r = c.resumo;
-    document.querySelectorAll('.caixa-grafico').forEach((el) => el.classList.toggle('sem-dados', !r.temDados));
+    const r = c.total;
+    const comDados = temDados(r);
+    document.querySelectorAll('.caixa-grafico').forEach((el) => el.classList.toggle('sem-dados', !comDados));
     if (!configurarPadraoGraficos()) {
       document.querySelectorAll('.caixa-grafico').forEach((el) => {
         el.classList.add('sem-dados');
@@ -753,8 +933,8 @@
       });
       return;
     }
-    if (!r.temDados) return;
-    $('graficoHoras').parentElement.style.height = Math.max(200, 46 * c.metricas.length + 90) + 'px';
+    if (!comDados) return;
+    $('graficoHoras').parentElement.style.height = Math.max(200, 46 * estado.equipamentos.length + 90) + 'px';
 
     // Evolução (áreas empilhadas, em %)
     atualizarGrafico('graficoEvolucao', () => ({
@@ -762,7 +942,8 @@
       data: {
         labels: [],
         datasets: [
-          { label: 'Ativo', data: [], borderColor: COR.ativo, backgroundColor: COR.ativo + '66', fill: 'origin' },
+          { label: 'Ativo no horário', data: [], borderColor: COR.ativo, backgroundColor: COR.ativo + '66', fill: 'origin' },
+          { label: 'Hora extra', data: [], borderColor: COR.ativo, backgroundColor: COR.ativo + '33', borderDash: [4, 3], fill: '-1' },
           { label: 'Espera', data: [], borderColor: COR.espera, backgroundColor: COR.espera + '55', fill: '-1' },
           { label: 'Inativo', data: [], borderColor: COR.inativo, backgroundColor: COR.inativo + '40', fill: '-1' },
         ].map((d) => ({ ...d, tension: 0.3, pointRadius: 0, pointHoverRadius: 4, borderWidth: 2 })),
@@ -773,15 +954,16 @@
           y: { stacked: true, min: 0, max: 100, ticks: { callback: (v) => v + '%' }, grid: { color: '#2b343d' } },
           x: { grid: { display: false } },
         },
-        plugins: { legend: { position: 'bottom' }, tooltip: { callbacks: { label: (i) => ' ' + i.dataset.label + ': ' + i.parsed.y.toLocaleString('pt-BR') + '%' } } },
+        plugins: { legend: { position: 'bottom' }, tooltip: { callbacks: { label: (i) => ' ' + i.dataset.label + ': ' + (i.parsed.y === null ? '—' : i.parsed.y.toLocaleString('pt-BR') + '%') } } },
       },
-    }), c.serie.map((p) => p.rotulo), [c.serie.map((p) => p.ativo), c.serie.map((p) => p.espera), c.serie.map((p) => p.inativo)]);
+    }), c.serie.map((p) => p.rotulo), [c.serie.map((p) => p.ativo), c.serie.map((p) => p.extra), c.serie.map((p) => p.espera), c.serie.map((p) => p.inativo)]);
 
     // Distribuição (rosca, em horas)
     const arred = (n) => +n.toFixed(1);
+    const h = (ms) => arred(ms / M.HORA);
     atualizarGrafico('graficoRosca', () => ({
       type: 'doughnut',
-      data: { labels: [], datasets: [{ data: [], backgroundColor: [COR.ativo, COR.espera, COR.inativo], borderWidth: 0 }] },
+      data: { labels: [], datasets: [{ data: [], backgroundColor: [COR.ativo, COR_EXTRA, COR.espera, COR.inativo], borderWidth: 0 }] },
       options: {
         responsive: true, maintainAspectRatio: false, cutout: '68%',
         plugins: {
@@ -796,16 +978,17 @@
           },
         },
       },
-    }), ['Ativo', 'Espera', 'Inativo'], [[arred(r.ativoH), arred(r.esperaH), arred(r.inativoH)]]);
+    }), ['Ativo no horário', 'Hora extra', 'Espera', 'Inativo'], [[h(r.tempoAtivoDentroMs), h(r.horasExtrasMs), h(r.tempoEsperaMs), h(r.tempoInativoMs)]]);
 
     // Horas por equipamento (barras empilhadas)
-    const comDados = c.metricas;
+    const inds = estado.equipamentos.map((e) => c.res.porEquipamento[e.id]);
     atualizarGrafico('graficoHoras', () => ({
       type: 'bar',
       data: {
         labels: [],
         datasets: [
-          { label: 'Ativo', data: [], backgroundColor: COR.ativo },
+          { label: 'Ativo no horário', data: [], backgroundColor: COR.ativo },
+          { label: 'Hora extra', data: [], backgroundColor: COR_EXTRA },
           { label: 'Espera', data: [], backgroundColor: COR.espera },
           { label: 'Inativo', data: [], backgroundColor: COR.inativo },
         ],
@@ -818,29 +1001,36 @@
         },
         plugins: { legend: { position: 'bottom' }, tooltip: { callbacks: { label: (i) => ' ' + i.dataset.label + ': ' + i.parsed.x.toLocaleString('pt-BR') + ' h' } } },
       },
-    }), comDados.map((m) => m.equip.nome), [
-      comDados.map((m) => arred(m.ativoMs / M.HORA)),
-      comDados.map((m) => arred(m.esperaMs / M.HORA)),
-      comDados.map((m) => arred(m.inativoMs / M.HORA)),
+    }), estado.equipamentos.map((e) => e.nome), [
+      inds.map((i) => h(i.tempoAtivoDentroMs)),
+      inds.map((i) => h(i.horasExtrasMs)),
+      inds.map((i) => h(i.tempoEsperaMs)),
+      inds.map((i) => h(i.tempoInativoMs)),
     ]);
   }
 
   /* ---------- Tabela ---------- */
 
   const COLUNAS = [
-    { id: 'nome', rotulo: 'Equipamento', valor: (l) => l.m.equip.nome.toLowerCase() },
+    { id: 'nome', rotulo: 'Equipamento', valor: (l) => l.e.nome.toLowerCase() },
     { id: 'status', rotulo: 'Status', valor: (l) => l.sit.estado || '' },
-    { id: 'utilizacao', rotulo: 'Utilização', valor: (l) => (l.m.temDados ? l.m.pctAtivo : null) },
-    { id: 'ativas', rotulo: 'Ativas', valor: (l) => (l.m.temDados ? l.m.ativoMs : null) },
-    { id: 'espera', rotulo: 'Espera', valor: (l) => (l.m.temDados ? l.m.esperaMs : null) },
-    { id: 'inativas', rotulo: 'Inativas', valor: (l) => (l.m.temDados ? l.m.inativoMs : null) },
-    { id: 'paradas', rotulo: 'Paradas', valor: (l) => (l.m.temDados ? l.m.paradas : null) },
-    { id: 'maiorParada', rotulo: 'Maior parada', valor: (l) => (l.m.temDados ? l.m.maiorParadaMs : null) },
+    { id: 'disponibilidade', rotulo: 'Disp. (OEE)', valor: (l) => (temDados(l.ind) ? l.ind.disponibilidadeOEE : null) },
+    { id: 'ativas', rotulo: 'Ativas', valor: (l) => (temDados(l.ind) ? l.ind.tempoAtivoTotalMs : null) },
+    { id: 'espera', rotulo: 'Espera', valor: (l) => (temDados(l.ind) ? l.ind.tempoEsperaMs : null) },
+    { id: 'inativas', rotulo: 'Inativas', valor: (l) => (temDados(l.ind) ? l.ind.tempoInativoMs : null) },
+    { id: 'extras', rotulo: 'Horas extras', valor: (l) => (temDados(l.ind) ? l.ind.horasExtrasMs : null) },
+    { id: 'execucoes', rotulo: 'Execuções', valor: (l) => (temDados(l.ind) ? l.ind.execucoes : null) },
+    { id: 'medio', rotulo: 'Tempo médio/exec.', valor: (l) => l.ind.tempoMedioExecucaoMs },
+    { id: 'paradas', rotulo: 'Paradas', valor: (l) => (temDados(l.ind) ? l.ind.paradas : null) },
+    { id: 'maiorParada', rotulo: 'Maior parada', valor: (l) => (temDados(l.ind) ? l.ind.maiorPeriodoSemProduzirMs : null) },
     { id: 'impacto', rotulo: 'Impacto estimado', valor: (l) => l.impacto },
   ];
 
   function renderTabela(c) {
-    const linhas = c.metricas.map((m) => ({ m, sit: c.situacoes[m.equip.id], impacto: M.impactoEquipamento(m, estado.params) }));
+    const linhas = estado.equipamentos.map((e) => {
+      const ind = c.res.porEquipamento[e.id];
+      return { e, ind, sit: c.situacoes[e.id], impacto: impactoDe(ind) };
+    });
     const col = COLUNAS.find((x) => x.id === estado.ordem.campo) || COLUNAS[2];
     const sinal = estado.ordem.dir === 'asc' ? 1 : -1;
 
@@ -862,18 +1052,22 @@
         '<button type="button" data-ordenar="' + x.id + '">' + x.rotulo + ' <span>' + seta + '</span></button></th>';
     }).join('');
 
-    const corpo = linhas.map(({ m, sit, impacto }) => {
-      const t = m.temDados;
-      const dash = '<span class="cor-suave">—</span>';
+    const dash = '<span class="cor-suave">—</span>';
+    const corpo = linhas.map(({ e, ind, sit, impacto }) => {
+      const t = temDados(ind);
+      const hr = (ms) => M.formatarHoras(ms / M.HORA);
       return '<tr>' +
-        '<td><p style="font-weight:500">' + esc(m.equip.nome) + '</p><p class="sub">' + esc(m.equip.modelo || '') + '</p></td>' +
+        '<td><p style="font-weight:500">' + esc(e.nome) + '</p><p class="sub">' + esc(e.modelo || '') + '</p></td>' +
         '<td>' + seloEstado(sit.estado) + '</td>' +
-        '<td>' + (t ? '<div class="util-celula"><div class="trilho"><i class="b-ativo" style="width:' + Math.min(m.pctAtivo, 100) + '%"></i></div><span class="num">' + M.formatarPct(m.pctAtivo) + '</span></div>' : dash) + '</td>' +
-        '<td class="num cor-ativo">' + (t ? M.formatarHoras(m.ativoMs / M.HORA) : dash) + '</td>' +
-        '<td class="num cor-espera">' + (t ? M.formatarHoras(m.esperaMs / M.HORA) : dash) + '</td>' +
-        '<td class="num cor-inativo">' + (t ? M.formatarHoras(m.inativoMs / M.HORA) : dash) + '</td>' +
-        '<td class="num">' + (t ? m.paradas : dash) + '</td>' +
-        '<td class="num">' + (t ? M.formatarDuracao(m.maiorParadaMs) : dash) + '</td>' +
+        '<td>' + (t ? '<div class="util-celula"><div class="trilho"><i class="b-ativo" style="width:' + Math.min(pct100(ind.disponibilidadeOEE), 100) + '%"></i></div><span class="num">' + M.formatarPct(pct100(ind.disponibilidadeOEE)) + '</span></div>' : dash) + '</td>' +
+        '<td class="num cor-ativo">' + (t ? hr(ind.tempoAtivoTotalMs) : dash) + '</td>' +
+        '<td class="num cor-espera">' + (t ? hr(ind.tempoEsperaMs) : dash) + '</td>' +
+        '<td class="num cor-inativo">' + (t ? hr(ind.tempoInativoMs) : dash) + '</td>' +
+        '<td class="num">' + (t ? hr(ind.horasExtrasMs) : dash) + '</td>' +
+        '<td class="num">' + (t ? ind.execucoes : dash) + '</td>' +
+        '<td class="num">' + (ind.tempoMedioExecucaoMs !== null ? M.formatarDuracao(ind.tempoMedioExecucaoMs) : dash) + '</td>' +
+        '<td class="num">' + (t ? ind.paradas : dash) + '</td>' +
+        '<td class="num">' + (t ? M.formatarDuracao(ind.maiorPeriodoSemProduzirMs) : dash) + '</td>' +
         '<td class="num">' + (impacto === null ? '<button type="button" class="link-btn" data-abrir-parametros>informar valores</button>' : M.formatarMoeda(impacto)) + '</td>' +
         '</tr>';
     }).join('');
@@ -882,30 +1076,43 @@
   }
 
   function renderRodape() {
-    const hora = estado.ultimaCarga ? new Date(estado.ultimaCarga).toLocaleTimeString('pt-BR') : '—';
+    const hora = estado.ultimaCarga ? M.formatarHoraFuso(estado.ultimaCarga, fuso()) : '—';
     $('rodapeSync').innerHTML = 'Dados carregados às ' + hora + ' · <button type="button" class="link-btn" style="color:var(--primaria)" data-recarregar>atualizar agora</button>';
   }
 
   /* ------------------------------------------------------------
-     JANELA DOS VALORES FINANCEIROS
+     JANELA DOS VALORES FINANCEIROS (gravados no banco, por empresa)
      ------------------------------------------------------------ */
   function abrirParametros() {
-    $('camposParametros').innerHTML = M.PARAMETROS_FINANCEIROS.map((p) =>
-      '<div class="campo"><label for="p_' + p.chave + '">' + p.rotulo + '</label>' +
+    const f = estado.config.financeiro;
+    $('camposParametros').innerHTML = M.PARAMETROS_FINANCEIROS_V10.map((p) =>
+      '<div class="campo"><label for="p_' + p.chave + '">' + esc(p.rotulo) + '</label>' +
       '<div class="entrada"><span>R$</span><input id="p_' + p.chave + '" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0,00" value="' +
-      (estado.params[p.chave] === null ? '' : estado.params[p.chave]) + '" /><span>/ hora</span></div></div>'
+      (f[p.chave] === null || f[p.chave] === undefined ? '' : f[p.chave]) + '" /><span>/ hora</span></div></div>'
     ).join('');
+    $('msgParametros').textContent = '';
     $('dlgParametros').showModal();
   }
 
   function lerCamposParametros() {
     const valores = {};
-    M.PARAMETROS_FINANCEIROS.forEach((p) => {
+    M.PARAMETROS_FINANCEIROS_V10.forEach((p) => {
       const bruto = $('p_' + p.chave).value.replace(',', '.').trim();
-      const n = Number(bruto);
-      valores[p.chave] = bruto !== '' && isFinite(n) && n >= 0 ? n : null;
+      valores[p.chave] = bruto === '' ? null : Number(bruto);
     });
     return valores;
+  }
+
+  // Grava no banco (pelo ConfigEmpresa). As "peças por execução" não têm tela, mas são preservadas.
+  async function salvarParametros(valores) {
+    if (!estado.empresa) { $('msgParametros').textContent = 'Empresa não carregada.'; return; }
+    const financeiro = { ...valores, pecasPorExecucao: estado.config.financeiro.pecasPorExecucao };
+    const r = await C.salvarFinanceiro(sb, estado.empresa.id, financeiro);
+    if (!r.ok) { $('msgParametros').textContent = r.erro; return; }
+    const rc = await C.carregarConfig(sb, estado.empresa.id, { forcar: true });
+    if (rc.ok) estado.config = rc.dados;
+    $('dlgParametros').close();
+    renderizar();
   }
 
   /* ------------------------------------------------------------
@@ -919,8 +1126,7 @@
       if (alvo.dataset.periodo) {
         estado.periodo = alvo.dataset.periodo;
         if (estado.periodo === 'custom' && !estado.custom.de) {
-          estado.custom.de = deInputData(paraInputData(Date.now() - 6 * M.DIA), false);
-          estado.custom.ate = deInputData(paraInputData(Date.now()), true);
+          estado.custom = { de: diaIso(Date.now() - 6 * M.DIA), ate: diaIso(Date.now()) };
         }
         renderPeriodos();
         sincronizarDatas();
@@ -929,7 +1135,7 @@
         const campo = alvo.dataset.ordenar;
         estado.ordem = estado.ordem.campo === campo
           ? { campo, dir: estado.ordem.dir === 'asc' ? 'desc' : 'asc' }
-          : { campo, dir: campo === 'nome' || campo === 'utilizacao' ? 'asc' : 'desc' };
+          : { campo, dir: campo === 'nome' || campo === 'disponibilidade' ? 'asc' : 'desc' };
         renderizar();
         const novo = document.querySelector('[data-ordenar="' + campo + '"]');
         if (novo) novo.focus();
@@ -941,10 +1147,10 @@
     });
 
     const aoMudarData = () => {
-      if (!$('dataDe').value || !$('dataAte').value) return;
-      let de = deInputData($('dataDe').value, false);
-      let ate = deInputData($('dataAte').value, true);
-      if (de > ate) [de, ate] = [ate, de];
+      let de = $('dataDe').value;
+      let ate = $('dataAte').value;
+      if (!de || !ate) return;
+      if (de > ate) [de, ate] = [ate, de]; // 'AAAA-MM-DD' compara certo como texto
       estado.custom = { de, ate };
       carregar();
     };
@@ -954,16 +1160,13 @@
     $('formParametros').addEventListener('submit', (ev) => {
       ev.preventDefault();
       salvarParametros(lerCamposParametros());
-      $('dlgParametros').close();
-      renderizar();
     });
     $('btnCancelarParametros').addEventListener('click', () => $('dlgParametros').close());
     $('btnLimparParametros').addEventListener('click', () => {
+      if (!window.confirm('Apagar os quatro valores do banco? Isso vale para toda a empresa.')) return;
       const vazio = {};
-      M.PARAMETROS_FINANCEIROS.forEach((p) => (vazio[p.chave] = null));
+      M.PARAMETROS_FINANCEIROS_V10.forEach((p) => (vazio[p.chave] = null));
       salvarParametros(vazio);
-      $('dlgParametros').close();
-      renderizar();
     });
 
     // voltou para a aba depois de um tempo: atualiza
@@ -990,4 +1193,7 @@
   }
 
   iniciar();
+
+  // usado só pelos testes automáticos
+  window._DashboardTeste = { estado, renderizar, calcularPagina };
 })();

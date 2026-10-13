@@ -1,0 +1,586 @@
+[PROJETO DE FACULDADE - SISTEMA WEB IOT]
+- Nome do Projeto: Monitoramento IoT para Torno Industrial (CARISSIMI IoT)
+- Objetivo: Sistema web para receber sinais de um CLP e monitorar tempo ativo, em espera e inativo de tornos, gerando relatórios de uso.
+- Requisitos: Login, Dashboard em Tempo Real, Histórico no Banco de Dados, Relatórios e Estrutura base para Multi-Empresas (campo empresa_id, CNPJ, Razão Social).
+  (O requisito de Login ficou para a 2ª fase, por decisão de escopo — ver DECISÕES, item J.)
+- Indústria parceira (trabalho acadêmico de Governança de TI - SENAI): Casa do Mecânico Ltda / Carissimi Controle e Automação. CNPJ 94.038.874/0001-81. Porto Alegre/RS. Fabricação de máquinas-ferramenta, peças e acessórios.
+- Grafia correta: CARISSIMI (um R só). Corrigida no GitHub, na Vercel e no DNS em 02/10/2026.
+- Site publicado: https://carissimi-iot.vercel.app/ (Vercel; código em repositório Git).
+
+--- STATUS ATUAL (v10.1, revisado em 08/10/2026 — fonte única — ignorar checklists antigas divergentes; a v10.1 substitui a v10 e a v9) ---
+Fases do projeto acadêmico como um todo (10 fases):
+  [x] Fase 1 - Definição do projeto e identificação da indústria parceira
+  [x] Fase 2 - Levantamento e definição de requisitos (interface web + escolha do CLP)
+  [~] Fase 3 - Fundamentação teórica e pesquisa (Indústria 4.0, IoT industrial, SCADA/MES) —
+      PRÓXIMO FOCO IMEDIATO: escrever o artigo (ver seção ARTIGO abaixo)
+  [x] Fase 4 - Definição da arquitetura e modelagem do banco de dados (estendida pela migração v10: ESPEC 01)
+  [~] Fase 5 - Desenvolvimento da interface web (Dashboard e Relatórios PRONTOS, publicados na
+      Vercel e conferidos com o banco real; falta a tela de Configurações — turno + valores em
+      R$ — que é o foco técnico atual; tela de cadastro de equipamento e tela de login ficam
+      para a 2ª fase, por decisão de escopo)
+  [~] Fase 6 - Configuração do CLP (firmware CONFIRMADO como 8.4 — suporta MQTT nativo E conexão
+      criptografada/TLS até a nuvem, confirmado em fonte oficial Siemens/Mouser; falta a equipe
+      de automação configurar o LOGO! para publicar de verdade no broker privado; o professor
+      sugeriu o Node-RED como camada de tradução dos sinais do CLP — EM AVALIAÇÃO, ver DECISÕES,
+      item I)
+  [~] Fase 7 - Integração dos sistemas (banco <-> interface funcionando end-to-end com Realtime
+      CONFIRMADO ao vivo; broker MQTT privado criado e ponte MQTT->Supabase testada com sucesso
+      via simulação; novo Dashboard (v8) testado com o painel-teste-mqtt.html e recebeu os sinais
+      com sucesso; site publicado na Vercel com conexão "AO VIVO" confirmada em 02/10/2026; falta
+      só o CLP real publicar)
+  [ ] Fase 8 - Testes
+  [ ] Fase 9 - Ajustes
+  [ ] Fase 10 - Documentação e apresentação final
+
+O que já foi feito:
+  1. Escopo e requisitos definidos.
+  2. Banco de dados Supabase configurado. Tabelas:
+     - empresas (id, razao_social, nome_fantasia, cnpj, criado_em)
+     - equipamentos (id, empresa_id, nome, modelo, status_atual, atualizado_em)
+     - historico_status (id, equipamento_id, empresa_id, status, registrado_em)
+     Separação proposital: status_atual fica cacheado em "equipamentos" (leitura rápida do estado
+     atual); "historico_status" guarda o log de eventos (usado depois para relatórios/OEE).
+  3. Frontend em HTML/CSS/JS puro + Supabase (sem framework). Estética de painel de controle
+     industrial (luzes piloto de status, leituras em fonte monoespaçada). Versão atual (v8):
+     ver seção "FRONTEND — ARQUIVOS E DECISÕES" abaixo. JS busca dados do Supabase e escuta
+     mudanças em tempo real (Realtime) nas tabelas equipamentos e historico_status.
+  4. Firmware do CLP confirmado: LOGO! 8.4 (suporta MQTT nativo). Item que travava a Fase 6
+     está resolvido.
+  5. Conectividade MQTT testada e validada manualmente com sucesso (ver seção própria abaixo).
+     Foi criada uma página de teste (painel-teste-mqtt.html, publicada como artifact) que conecta
+     no broker público, escuta o tópico do projeto e simula sinais do CLP com botões — útil para
+     testar o restante do sistema mesmo antes do CLP real estar publicando.
+  6. Painel testado com sucesso, rodando localmente via VS Code + extensão Live Server
+     (http://127.0.0.1:5500). Mostra dados reais do Supabase: empresa Carissimi
+     (CNPJ 94038874000181) e equipamento de teste "Torno CNC" (tag TRC4 NR12), com a luz piloto
+     de status funcionando. Carga inicial dos dados (SELECT) e atualização automática via
+     Realtime (sem recarregar a página) AMBAS confirmadas funcionando — ver seção "REALTIME"
+     abaixo para onde ativar isso no painel do Supabase.
+     Armadilha já encontrada e resolvida: SUPABASE_URL deve ser SÓ a URL base do projeto
+     (https://<id>.supabase.co), SEM "/rest/v1" no final — colar a URL errada (com /rest/v1)
+     causa erro 404 duplicado nas consultas E falha de autenticação no WebSocket do Realtime.
+
+  7. Dashboard reconstruído (index.html) usando o projeto gerado pelo Lovable como referência de
+     design e de lógica de indicadores (copiado "descaradamente", como combinado), mas recriado em
+     CSS/JS puro e ligado aos dados REAIS do Supabase — nada dos dados fictícios do Lovable.
+     Testado com o painel-teste-mqtt.html: sinais chegam e o painel atualiza ao vivo.
+  8. Tela de Relatórios criada (relatorios.html + js/relatorios.js). Ver seção FRONTEND.
+     Conferida com o banco real em 02/10/2026 (exibindo os dados corretamente).
+  9. Correção de status: o banco grava o estado de espera como "EM_ESPERA" (e não "espera").
+     js/metrics.js (normalizarStatus) agora reconhece ativo / espera, em espera, EM_ESPERA
+     (maiúsculas, hífen ou underscore) / inativo. Status não reconhecido é IGNORADO sem aviso (comportamento do código v8; a ESPEC 02 passa a avisar na tela).
+     O texto exibido na tela continua "ESPERA" (o rótulo de exibição não deve ter underline).
+  10. Projeto publicado na Vercel (https://carissimi-iot.vercel.app/). Conferido em 02/10/2026:
+      Dashboard e Relatórios no ar; menu com Equipamentos/Histórico/Indicadores "em breve"; pílula
+      "AO VIVO" ativa; modo ?demo=1 funcionando; Relatórios exibindo dados do banco real.
+  11. Verificação dos status no banco (SQL group by, 02/10/2026): só existem ATIVO (15), EM_ESPERA
+      (21) e INATIVO (13) — nenhum status desconhecido sendo ignorado.
+  12. Fuso horário verificado: o banco guarda registrado_em em UTC (o "+00" é só o aviso); a hora
+      local de Porto Alegre (UTC-3) confere (teste de 1 minuto bem-sucedido). DECISÃO: continuar
+      gravando em UTC e converter para o fuso da empresa (America/Sao_Paulo) só na tela e nos
+      cálculos. Não é um erro de gravação.
+  13. Correção de grafia: a marca/empresa é CARISSIMI (um R só), não "CARRISSIMI". Corrigido no
+      GitHub, na Vercel e no DNS. Este arquivo e a Diretriz de identidade visual já usam a grafia
+      correta.
+  14. Alinhamento com o proprietário da revenda de equipamentos Carissimi e definições FECHADAS
+      pelo usuário em 05/10/2026 (detalhes na seção DECISÕES DE PROJETO): novo contador de
+      execuções; ATIVO = ligado e operando; EM_ESPERA unificado com SETUP (não existe status SETUP);
+      INATIVO = desligado e só conta com a indústria aberta; estado técnico SEM_SINAL; nomenclatura
+      dos indicadores alinhada ao OEE (o sistema cobre só o pilar Disponibilidade); "custo de
+      parada" passa a "custo de oportunidade estimado".
+
+O que estamos fazendo AGORA:
+  - Dashboard e Relatórios entregues, publicados, testados e conferidos com o banco real.
+  - FOCO IMEDIATO: escrever o artigo da Fase 3 (fundamentação teórica) — ver seção ARTIGO.
+  - EM AVALIAÇÃO: Node-RED como camada de tradução CLP -> sistema (sugestão do professor) — ver
+    DECISÕES, item I, e PENDÊNCIAS EXTERNAS.
+  - EM SEGUIDA (foco técnico), nesta ordem — desenho completo na seção DECISÕES DE PROJETO (v10) e implementação
+    na seção ESPECIFICAÇÕES PARA IMPLEMENTAÇÃO (ESPEC 00 a 08):
+      1) SQL no Supabase: turno e fuso por empresa, valores em R$, campo de último sinal.
+      2) Régua do turno + dia desconsiderado + nomenclatura OEE dos indicadores (metrics.js).
+      3) Contador de execuções (e tempo médio por execução) no Dashboard e nos Relatórios, por
+         máquina e respeitando o filtro de período.
+      4) Tela de Configurações (turno + valores em R$) e valores gravados no banco, por empresa.
+      5) Alerta de parada só dentro do expediente.
+      6) SEM_SINAL (depende do sinal periódico do CLP/Node-RED).
+      7) Testes com ?demo=1 (atualizar js/demoData.js com execuções e INATIVO no expediente) e com o
+         banco real; limpar/regerar os dados de teste antes da apresentação.
+      8) Atualizar este CONTEXTO.
+  - Em paralelo, com terceiros: equipe de automação (sinais físicos, sinal periódico, CLP real
+    publicando no broker privado) e professor (Node-RED, normas do artigo).
+  - FICA PARA A 2ª FASE (não essencial para a apresentação): segurança/RLS, tela de login,
+    cadastro de empresa e de equipamento, calendário de exceções, motivo da parada, Performance e
+    Qualidade do OEE.
+
+--- FRONTEND — ARQUIVOS E DECISÕES (v8) ---
+Arquivos (pasta do projeto, servida pelo Live Server em http://127.0.0.1:5500 e publicada na
+Vercel em https://carissimi-iot.vercel.app/ — o código ainda é o da v8; turno e valores no banco
+ainda NÃO foram implementados):
+  index.html          Dashboard operacional
+  relatorios.html     Relatórios
+  style.css           Estilo único das duas páginas (paleta grafite + ciano; inclui estilo de impressão)
+  js/supabaseClient.js  Só a URL base + chave anon; expõe window.supabaseClient. O usuário mantém o
+                      dele preenchido — NÃO substituir ao atualizar os outros arquivos.
+  js/metrics.js       TODOS os cálculos (sem tela): blocos de tempo por estado a partir do
+                      historico_status, utilização, disponibilidade, paradas, maior período sem
+                      produzir, série temporal, períodos, financeiro, formatação pt-BR.
+  js/dashboard.js     Tela do Dashboard + Realtime. Constantes ajustáveis (LIMITES dos alertas) no topo.
+  js/relatorios.js    Tela de Relatórios.
+  js/demoData.js      Dados fictícios (6 tornos, 100 dias) usados só com ?demo=1.
+Como testar: Live Server. Colocar ?demo=1 no fim do endereço de qualquer página abre com dados
+fictícios (faixa avisa "Modo demonstração"); sem ?demo=1 usa o Supabase real.
+Bibliotecas por CDN: supabase-js@2 e chart.js@4.4.7 (jsdelivr). (Substitui a nota antiga de
+"CSS/SVG puro, sem biblioteca nova".)
+
+Decisões de cálculo (CÓDIGO ATUAL v8 — as definições de Utilização, Disponibilidade e Paradas
+abaixo serão SUBSTITUÍDAS pelas da seção DECISÕES DE PROJETO, itens A, B, D e E):
+  - Tempo em cada estado = intervalo entre um evento e o próximo em historico_status; o último
+    estado vale até "agora". Tempo sem nenhum evento conhecido NÃO entra ("tempo monitorado").
+  - Utilização = ativo ÷ monitorado. Disponibilidade = (ativo + espera) ÷ monitorado.
+    Paradas = nº de vezes em INATIVO. Maior período sem produzir = maior sequência de espera/inativo.
+  - Comparação (▲/▼) com o período anterior de mesma duração ("Mês atual" compara com o mês
+    anterior até o mesmo ponto).
+  - Base atual = tempo corrido de 24h (AINDA não considera horário de funcionamento; será
+    substituída pela "régua do turno" — ver DECISÕES DE PROJETO).
+  - Impacto financeiro estimado = horas em espera × custo de ociosidade/h + horas inativas ×
+    custo de parada/h (também: capacidade não utilizada e custo operacional). Os valores são
+    informados na janela "Configurar valores" e ficam no navegador (localStorage, chave
+    carissimi.financeiro), compartilhados entre Dashboard e Relatórios; vazio = "não calculado".
+    PENDENTE: migrar para o banco, por empresa (hoje ficam presos ao navegador/endereço e se
+    perdem ao trocar de computador, de endereço ou ao limpar dados).
+  - Nomes vindos do banco são escapados antes de ir para a tela.
+
+Dashboard (index.html): 8 KPIs (equipamentos; ativos/espera/inativos agora; utilização,
+  disponibilidade, tempo produtivo e improdutivo com comparação), cartões por máquina (estado,
+  tempo no estado, composição, paradas; piscam quando o estado muda), linha do tempo dos estados,
+  perda de capacidade, alertas, visão financeira, atividade recente, 3 gráficos (evolução,
+  distribuição, horas por equipamento), tabela ordenável, seletor de período (Hoje/24h/7d/30d/
+  Mês atual/Personalizado) e pílula de conexão ("AO VIVO"). Realtime incremental (INSERT em
+  historico_status; mudanças em equipamentos) + recarga completa de segurança a cada 5 min.
+  Alertas atuais: espera contínua >60 min; inativo >2 h em horário de turno (seg–sex 7h–18h,
+  PROVISÓRIO fixo no código até existir o cadastro de horário); utilização <20%; espera >25%;
+  >6 paradas/dia; máquina sem registros no período.
+Relatórios (relatorios.html): identificação (empresa, CNPJ, período, gerado em), resumo com
+  comparação, conclusões automáticas em texto, gráfico por hora/dia/semana, tabela por
+  equipamento (com total), tabela por hora/dia/semana, filtro de equipamento, Exportar CSV (2
+  tabelas; separador ";" e vírgula decimal, abre no Excel), Imprimir/salvar PDF (estilo claro) e
+  quadro "Como os números são calculados". Períodos: Hoje, 7d, 30d, Mês atual, Mês anterior,
+  Personalizado. Lê até 30.000 registros por vez (avisa se truncar).
+Menu lateral: Dashboard e Relatórios ativos; Equipamentos, Histórico e Indicadores "em breve"
+  (no celular o menu vira 2 botões no topo).
+
+--- DECISÕES DE PROJETO (v10, 05/10/2026) — STATUS, TURNO, EXECUÇÕES, NOMENCLATURA OEE, FINANCEIRO E ESCOPO ---
+Alinhadas com o proprietário da revenda de equipamentos Carissimi e confirmadas pelo usuário em
+05/10/2026. Substituem as da v9 onde divergirem.
+
+A) STATUS (definições fechadas)
+   - ATIVO: máquina ligada e operando. Conta como tempo produzindo.
+   - EM_ESPERA: máquina ligada, sem operar (espera, preparação/setup, troca de peça). O SETUP foi
+     UNIFICADO aqui: não existe status SETUP e não se distingue setup por ora. É perda de
+     disponibilidade (ociosidade e setup).
+   - INATIVO: máquina desligada. Só conta DENTRO do expediente (régua do turno); fora dele é
+     ignorado, e dia em que a indústria não abre não aciona o contador de inativo. Leitura gerencial
+     (dica na tela, sem afirmar): pode indicar baixa demanda ou manutenção. O sistema NÃO distingue
+     as causas.
+   - SEM_SINAL: estado TÉCNICO, não é status de negócio. Significa falta de comunicação do CLP/
+     gateway. Não entra nos cálculos; só gera aviso na tela. É gravado como EVENTO pelo Node-RED (horário do último
+     sinal) e também derivado pelo site quando o último sinal passa de 5 min. Exige sinal periódico (item F).
+   - DESLIGADO não existe como status: INATIVO = desligada.
+   - Sinais físicos do CLP que definem cada status: A CONFIRMAR com a equipe de automação.
+   - Futuro (2ª fase): o gestor poderia marcar o motivo dos INATIVO longos (manutenção, sem
+     demanda, falta de material, outro).
+
+B) RÉGUA DO TURNO (horário de funcionamento cadastrado por empresa). O horário vira uma "régua" que
+   diz quais horas entram na conta. "Indústria aberta" = turno cadastrado (não há mecanismo
+   separado). Horas extras NÃO precisam ser cadastradas: são reconhecidas pelas regras abaixo.
+   1. DENTRO do turno conta tudo (ativo, espera, inativo). Início atrasado aparece como perda.
+   2. FORA do turno conta só o tempo ATIVO. Hora extra, início mais cedo e sábado trabalhado são
+      reconhecidos automaticamente.
+   3. FORA do turno, EM_ESPERA e INATIVO são IGNORADOS (noites e fins de semana não derrubam os
+      indicadores).
+   4. O produzido fora do turno aparece à parte, em "Horas extras produtivas".
+   5. Mínimo de 5 min de ATIVO contínuo fora do turno para contar como hora extra (constante
+      ajustável no topo do código, junto aos LIMITES dos alertas).
+   6. Sem horário cadastrado: mantém 24h corridas e exibe aviso na tela.
+   7. O alerta "inativo há muito tempo" só dispara dentro do expediente (substitui o horário
+      provisório fixo seg–sex 7h–18h que existe no código).
+   8. Nota de método: o ATIVO fora do turno soma no numerador e no denominador, o que melhora a
+      Disponibilidade; por isso aparece separado e deve ser descrito no artigo e no quadro "Como os
+      números são calculados".
+
+C) DIA SEM EXPEDIENTE (feriado). Para a apresentação: um dia dentro do turno é desconsiderado se
+   NENHUMA máquina da empresa teve ATIVO nem EM_ESPERA naquele dia; a tela AVISA (ex.: "1 dia
+   desconsiderado (07/10): nenhum equipamento ligado") e o quadro "Como os números são calculados"
+   explica a regra. Limite: com INATIVO = desligada, a inferência é mais fraca (dia todo desligado
+   pode ser feriado ou baixa demanda geral); com 1 torno é indistinguível. No produto, a regra
+   principal será o CALENDÁRIO CADASTRADO (o dono marca feriados e exceções) e a inferência vira só
+   sugestão. A tabela excecoes_calendario fica para a 2ª fase.
+   Detalhes fechados na ESPEC 02: só vale para dias já ENCERRADOS (agora >= fim da última faixa do dia)
+   e inteiros dentro do período; exige tempo monitorado no turno (dia sem dados não é feriado); a
+   detecção usa os eventos de TODAS as máquinas da empresa, mesmo com filtro de equipamento na tela.
+
+D) CONTADOR DE EXECUÇÕES (indicador novo)
+   - Definição: número de vezes que o status PASSOU a ATIVO no período filtrado em tela, por
+     máquina (hoje 1 máquina; no futuro várias; total da empresa = soma).
+   - Objetivo: guia para o gestor de chão de fábrica estimar quantas peças foram feitas. NÃO é
+     preciso, pois não há controle de peças. Na tela chama-se "Execuções", nunca "peças".
+   - Regras: conta a MUDANÇA para ATIVO (status anterior diferente de ATIVO), não linhas ATIVO
+     repetidas; um ATIVO iniciado antes do período não conta como execução do período; ignora
+     execuções mais curtas que um mínimo de segundos (constante no topo do código; valor inicial 10 s, a
+     validar com a automação);
+     inclui as execuções fora do turno (hora extra).
+   - Complementos: "tempo médio por execução" (tempo ATIVO ÷ execuções), para o gestor conferir a
+     estimativa; bloco OPCIONAL (O1) "peças por execução" (padrão 1) para estimar peças — a coluna
+     pecas_por_execucao já existe na migração; implementar só se o usuário aprovar (PENDENTE).
+   - Limite conhecido: uma peça pode gerar 2 ou mais execuções (pausa para abrir a porta) e uma
+     execução pode gerar várias peças.
+   - Cuidado técnico: o sinal periódico NÃO pode criar linhas em historico_status (só atualiza o
+     "último sinal"), senão infla o contador.
+   - "Paradas" (nº de vezes em INATIVO) continua, agora só dentro do expediente.
+
+E) NOMENCLATURA DOS INDICADORES (alinhada ao OEE; fonte: oee.com.br, "Como calcular o OEE")
+   OEE = Disponibilidade x Performance x Qualidade. Disponibilidade = tempo produzindo ÷ tempo
+   programado para produzir.
+   - "Disponibilidade (OEE)" = ATIVO ÷ tempo programado (régua do turno). No código v8 isso se
+     chamava "Utilização".
+   - "Máquina ligada" = (ATIVO + EM_ESPERA) ÷ tempo programado. No código v8 isso se chamava
+     "Disponibilidade".
+   - O rótulo "Utilização" deixa de ser usado, para não confundir.
+   - Perdas de disponibilidade (figura do OEE): quebra de máquina/manutenção = INATIVO;
+     ociosidade e setup = EM_ESPERA.
+   - ADERÊNCIA: o sistema cobre só o pilar DISPONIBILIDADE. Performance (produção real ÷ teórica;
+     exige contagem de peças e tempo de ciclo padrão) e Qualidade (boas ÷ total; exige refugo) NÃO
+     são cobertas: trabalho futuro. Não chamar o sistema de "OEE completo"; usar "monitoramento da
+     Disponibilidade, primeiro componente do OEE". O contador de execuções é só um guia, não é
+     Performance.
+   - Limitação: EM_ESPERA mistura causas (operador ausente, falta de pedido), e o OEE exclui paradas
+     por motivos alheios à produção. Só se resolve com o motivo da parada (2ª fase).
+
+F) SEM_SINAL E SINAL PERIÓDICO
+   - Hoje, sem sinal periódico, o último estado continua sendo contado (nos dados de teste, cerca
+     de 8 dias de ATIVO).
+   - Proposta: o CLP/gateway envia um sinal periódico (cerca de 1 min). Ele NÃO gera linha no
+     histórico: só atualiza o "último sinal" (coluna proposta: equipamentos.ultimo_sinal_em). Se
+     passar do limite sem sinal, o equipamento entra em SEM_SINAL: fica fora do cálculo e gera
+     aviso. O site também deve checar a idade do último sinal, para não depender de um único
+     componente.
+   - Depende da equipe de automação e da decisão sobre o Node-RED (item I).
+   - Valores iniciais: o Node-RED grava SEM_SINAL após 3 min sem nenhum sinal; o site considera
+     SEM_SINAL quando passam mais de 5 min do último sinal, e só se ultimo_sinal_em existir (enquanto
+     for nulo, não há falso SEM_SINAL). Quando o sinal volta, o primeiro status válido é gravado como
+     evento novo mesmo que seja igual ao anterior; o contador de execuções ignora o SEM_SINAL ao
+     olhar o status anterior.
+
+G) BANCO DE DADOS (nomes FINAIS, já em migracao_v10.sql — ver ESPEC 01)
+   - empresas: fuso_horario (padrão America/Sao_Paulo); custo_ociosidade_hora, custo_oportunidade_hora,
+     valor_capacidade_hora, custo_operacional_hora (R$/h; nulo = não informado); pecas_por_execucao
+     (opcional, padrão 1).
+   - horarios_funcionamento (tabela nova): id, empresa_id, dia_semana (0=domingo ... 6=sábado),
+     hora_inicio, hora_fim (24:00 permitido), criado_em. Uma linha por faixa; vários por dia (ex.: 07:00–12:00
+     e 13:00–17:00 deixa o almoço fora). Futuro: equipamento_id opcional.
+   - equipamentos: ultimo_sinal_em (item F).
+   - historico_status: sinais_brutos (jsonb, opcional, para rastrear e reprocessar se as definições mudarem);
+     status aceitos ATIVO, EM_ESPERA, INATIVO e SEM_SINAL (este gravado pelo Node-RED). A trava de valores
+     (constraint) fica comentada no SQL, para rodar depois que tudo estiver estável.
+   - Índices por (equipamento_id, registrado_em) e (empresa_id, registrado_em).
+   - Função salvar_horarios(p_empresa_id, p_horarios jsonb): grava o turno inteiro numa transação.
+   - Turno inicial da Carissimi: seg–sex 07:00–12:00 e 13:00–17:00 (A CONFIRMAR com a empresa; editável na
+     tela de Configurações).
+   - Horários gravados sempre em UTC; convertidos para o fuso da empresa na tela e nos cálculos.
+   - Os 3 arquivos SQL (migracao_v10.sql, conferir_migracao_v10.sql, dados_de_teste_opcional.sql) foram
+     testados num PostgreSQL local (a migração roda duas vezes sem erro). Antes de rodar, checar os tipos de
+     id (se aparecer uuid, avisar). O script de dados de teste APAGA o histórico do 1º equipamento.
+
+H) FINANCEIRO: estimativa POR EMPRESA e POR HORA. Valores por equipamento foram descartados:
+   difíceis de mensurar máquina a máquina e os dados devem ser exportados para outro sistema de
+   análise. Valores salvos no banco (colunas em empresas), válidos no Dashboard e nos Relatórios.
+   Na tela, escrever "estimativa média por hora" e dar exemplos de preenchimento. Os 4 campos:
+   - Custo de ociosidade/h (espera): custo de 1 h ligada sem operar (energia, operador,
+     depreciação).
+   - Custo de oportunidade/h (inativo, estimado) — antes "custo de parada": o que se deixa de
+     ganhar por hora desligada (margem da peça x peças por hora). Só é perda real se havia
+     demanda; em baixa demanda a margem não existiria. Deixar o aviso na tela.
+   - Valor da capacidade produtiva/h: valor de 1 h de produção plena.
+   - Custo operacional/h (ligada): custo de manter a máquina ligada, operando ou não.
+   Não somar tudo: ociosidade e custo operacional se sobrepõem; oportunidade e capacidade medem
+   perda de produção. O "impacto financeiro" continua = horas em espera x ociosidade + horas
+   inativas (no expediente) x oportunidade; os outros dois alimentam seus próprios cartões.
+   Fórmulas de referência (ESPEC 02): capacidade não utilizada = (horas em espera + horas inativo) x valor
+   da capacidade; custo operacional = (horas ATIVO total + horas em espera) x custo operacional. Se o código
+   atual usar outra fórmula, manter a atual e só trocar a base de tempo (dentro do turno).
+
+I) NODE-RED COMO CAMADA DE TRADUÇÃO (sugestão do professor — EM AVALIAÇÃO; usuário pediu parecer)
+   Fluxo proposto: LOGO! -> MQTT/TLS -> HiveMQ Cloud -> Node-RED (traduz os sinais em ATIVO/
+   EM_ESPERA/INATIVO, valida, deduplica e vigia o sinal periódico) -> Supabase (REST) -> site.
+   Parecer do assistente (a validar com professor e automação): ADOTAR, com estes limites:
+   1. Node-RED só TRADUZ, valida, deduplica e vigia o sinal. Cálculos (régua, execuções,
+      indicadores) ficam no sistema, para a regra de negócio não se espalhar.
+   2. Gravar só mudanças em historico_status; o sinal periódico só atualiza ultimo_sinal_em.
+   3. Mandar o horário do evento (UTC) junto com o registro, para reenvios após queda de conexão
+      não distorcerem as durações.
+   4. Guardar também os sinais brutos (JSON), pois as definições já mudaram várias vezes.
+   5. Tabela de mapeamento documentada: sinal do CLP -> status (preenchida pela automação).
+   6. Segurança: chave de escrita do Supabase só nas credenciais do Node-RED (nunca no navegador),
+      editor do Node-RED protegido por senha e fora da internet pública. Isso permite, na 2ª fase,
+      tirar a permissão de escrita do site.
+   7. Decidir ONDE roda 24/7 (PC já existente e sempre ligado na Carissimi, ou nuvem gratuita —
+      conferir os limites atuais). Lembrar: o usuário não quer comprar equipamento dedicado.
+   Ganhos: substitui a "ponte" em página HTML (que não roda 24/7); mudar a definição de um status
+   passa a ser ajustar um fluxo, sem reprogramar o CLP; serve de contrato de dados para outros
+   modelos de CLP no futuro (produto); bom exemplo de computação de borda para o artigo.
+   Riscos: mais um componente para manter; ponto único de falha; por isso o site também confere a
+   idade do último sinal (item F).
+
+J) ESCOPO — fica para a 2ª fase (não essencial para a apresentação): segurança/RLS, tela de login,
+   cadastro de empresa e de equipamento, calendário de exceções, motivo da parada, Performance e
+   Qualidade do OEE. DESCARTADOS: valores financeiros por equipamento; status SETUP separado;
+   status DESLIGADO.
+
+K) ORDEM DE IMPLEMENTAÇÃO: ver "O que estamos fazendo AGORA" e a seção ESPECIFICAÇÕES PARA IMPLEMENTAÇÃO.
+
+L) CONSTANTES (objeto CONFIG_METRICAS no topo de js/metrics.js; valores iniciais)
+   - Hora extra mínima: 5 min contínuos de ATIVO fora do turno.
+   - Execução mínima: 10 s (a validar com a automação).
+   - SEM_SINAL no site: mais de 5 min desde o último sinal.
+   - Node-RED: SEM_SINAL após 3 min sem sinal; debounce de 2 s; sinal periódico a cada ~60 s; no máximo 1
+     atualização de ultimo_sinal_em por 30 s por máquina.
+
+M) INDICADORES ADICIONAIS: "Horas extras produtivas" (ATIVO fora do turno, já filtrado pelo mínimo) e
+   "Cobertura de dados" (tempo monitorado dentro do turno ÷ tempo programado), que serve de aviso de
+   qualidade quando há falta de registros ou SEM_SINAL.
+
+--- ESPECIFICAÇÕES PARA IMPLEMENTAÇÃO (pasta especificacoes_v10) ---
+Arquivos: 00_ESPEC_BASE (regras gerais, status, modelo de dados, constantes, mapa e modelo de prompt) · 01_ESPEC_BANCO
+(+ migracao_v10.sql, conferir_migracao_v10.sql, dados_de_teste_opcional.sql) · 02_ESPEC_metrics · 03_ESPEC_configEmpresa ·
+04_ESPEC_tela_configuracoes · 05_ESPEC_dashboard · 06_ESPEC_relatorios · 07_ESPEC_demoData ·
+08_ESPEC_contrato_dados_node-red.
+Ordem: 01 (o usuário roda o SQL) -> 02, 03 e 08 em paralelo (arquivos diferentes) -> 04, 05, 06 e 07 (consomem o que 02 e
+03 entregam). As ESPEC 02, 03 e 05 a 07 mexem em arquivos que se tocam: nunca duas IAs no mesmo arquivo ao mesmo tempo.
+Regras: nenhuma IA troca js/supabaseClient.js; arquivo antigo + ESPEC 00 + ESPEC do arquivo vão juntos; o código novo
+de 02 e 03 vai junto para as IAs de 04 a 07; ao enviar arquivos a uma IA, trocar a chave anon por XXXX.
+Uso com IDE com agente (Antigravity IDE, em avaliação): colocar as ESPEC em docs/especificacoes/ dentro do projeto
+(sob Git, com commit antes de cada especificação); criar um AGENTS.md na raiz com as regras da ESPEC 00 (curto; há
+limite de caracteres por arquivo de regras); uma ESPEC por tarefa; revisão de cada alteração ligada ("Request Review");
+nenhum segredo (service_role, senhas do HiveMQ) na pasta nem no chat do agente. As ESPEC foram escritas para IA de
+chat: para o agente, trocar 3 frases ("editar o arquivo no lugar" em vez de "entregar arquivo completo"; CSS novo com
+prefixo no fim do style.css; os arquivos já estão no workspace).
+Pendente: o usuário decidir se quer "peças estimadas" (O1) e validar os valores iniciais da seção L.
+
+--- LIMITAÇÕES CONHECIDAS (v10.1) ---
+  - Sem sinal periódico do CLP não há como detectar perda de comunicação: o último estado
+    continua sendo contado até agora.
+  - Sem horário de funcionamento cadastrado: os indicadores de tempo (Utilização/Disponibilidade no código
+    v8; Disponibilidade (OEE) e Máquina ligada na v10) usam 24h corridas e o impacto financeiro de "parada"
+    conta noites e fins de semana (inflado em fábrica de um turno; tratar como teto até implementar a
+    régua do turno, ESPEC 02).
+  - Multi-empresa ainda não existe no front: as telas leem tudo, sem filtrar por empresa, e
+    mostram a primeira empresa cadastrada (sem login/RLS).
+  - Status desconhecido no banco é ignorado sem aviso no código v8 (verificado em 02/10/2026: não há
+    nenhum; a ESPEC 02 passa a avisar).
+    Verificação sugerida (SQL Editor do Supabase):
+    select status, count(*) from historico_status group by status;
+  - Dados de teste distorcem os números: por exemplo, o ATIVO de 24/09 só termina no INATIVO de
+    02/10, então o sistema conta cerca de 8 dias de produção. Limpar ou gerar eventos mais
+    realistas antes da apresentação. A causa de fundo é a falta do sinal periódico do CLP.
+  - A "ponte" MQTT -> Supabase hoje é uma página HTML aberta num navegador: não roda 24/7 e, se a
+    página fechar, os sinais não chegam ao banco (o Node-RED, item I, a substituiria).
+  - O sistema cobre só a Disponibilidade do OEE; Performance e Qualidade não são medidas.
+
+--- INDICADORES — PENDÊNCIAS E PLANO ---
+Duas questões identificadas ao formalizar os indicadores de produtividade (v10: as definições dos
+status foram FECHADAS em 05/10/2026 — ver DECISÕES, item A — e resta a automação confirmar os sinais
+físicos; a questão 2 está resolvida no desenho pela régua do turno, item B, mas AINDA NÃO implementada):
+
+1) O que exatamente é "EM_ESPERA"? (vs ATIVO e vs INATIVO)
+   Plano:
+   (O banco grava o estado como EM_ESPERA; o front já reconhece essa grafia.)
+   a. Perguntar à equipe de automação qual sinal físico do CLP vai diferenciar ATIVO de
+      EM_ESPERA (ex: corrente do eixo-árvore, sinal de ciclo do CNC rodando, sensor de porta).
+   b. Até a resposta chegar, adotar hipótese PROVISÓRIA e documentada: torno ligado mas sem
+      sinal de corte = espera; torno desligado = inativo (sem comunicação = SEM_SINAL, ver DECISÕES, item F). Não travar o
+      cronograma acadêmico esperando resposta externa.
+   c. Quando o CLP real começar a publicar, validar comparando com observação física da máquina
+      e ajustar o critério se necessário.
+
+2) Fora do horário de funcionamento da fábrica (noite, fim de semana), o equipamento aparece
+   como "inativo" e derruba a Disponibilidade artificialmente — precisa excluir esse tempo do
+   cálculo (prática padrão de OEE: medir sobre tempo programado de produção, não tempo corrido).
+   Plano:
+   a. Criar um cadastro de horário de funcionamento (ex: 07h–17h, seg-sex) — por empresa por
+      enquanto, pensando em no futuro permitir por equipamento/turno. Novo pedaço de schema no
+      Supabase; campo vai aparecer na futura tela de Configurações.
+   b. Ajustar o cálculo de Disponibilidade/Utilização no metrics.js (ESPEC 02) para considerar só o tempo
+      DENTRO do horário cadastrado.
+   c. Ajustar o alerta de "inativo há muito tempo" para não disparar fora do expediente (evitar
+      alerta falso todo início de manhã).
+   AINDA NÃO IMPLEMENTADO — desenho definitivo na seção DECISÕES DE PROJETO (v10) e implementação nas
+   ESPEC 01 a 06. Hoje o Dashboard/Relatórios usam 24h corridas e um horário de turno provisório fixo
+   no código só para o alerta de parada.
+
+--- PENDÊNCIAS EXTERNAS (automação e professor) ---
+Equipe de automação:
+  1. Quais sinais físicos do LOGO! definem ATIVO (operando), EM_ESPERA (ligada sem operar) e
+     INATIVO (desligada)?
+  2. O LOGO! 8.4 consegue enviar um sinal periódico (cerca de 1 min), separado das mudanças de
+     estado?
+  3. Qual é o formato exato da mensagem que o LOGO! publica (tópicos e conteúdo bruto)?
+  4. Configurar o LOGO! para publicar no broker privado (porta 8883, TLS, usuário carissimi-clp).
+Professor:
+  5. O Node-RED será obrigatório? Onde vai rodar 24/7 (PC sempre ligado na Carissimi ou nuvem)?
+  6. Normas de formatação, tamanho e prazo do artigo.
+Carissimi:
+  7. Horário real de funcionamento (almoço? sexta diferente?) para cadastrar o turno inicial.
+Usuário:
+  8. Criar no HiveMQ o usuário "carissimi-nodered" (publish/subscribe) se o Node-RED for adotado.
+  9. Decidir se quer o bloco opcional "peças estimadas" (O1) e validar as constantes da seção L.
+
+--- BROKER PRIVADO (HiveMQ Cloud, plano gratuito "Serverless") ---
+- Criado para substituir o broker público de testes antes de dados reais.
+- Host: 63791bf730674dcc876d29a7ea5968e4.s1.eu.hivemq.cloud
+- Porta MQTT com TLS (para o CLP conectar diretamente): 8883
+- Porta Websocket com TLS (para páginas/apps no navegador): 8884, caminho /mqtt
+  (endereço completo usado no navegador: wss://<host>:8884/mqtt)
+- Credenciais criadas em Access Management: usuário "carissimi-app" (Publish and Subscribe),
+  senha definida na hora — não fica registrada aqui, ver gerenciador de senhas.
+  Segundo usuário definido: "carissimi-clp", dedicado para o CLP usar (não confundir as portas:
+  ver item abaixo). Terceiro usuário previsto, se o Node-RED for adotado: "carissimi-nodered" (ESPEC 08).
+- IMPORTANTE — portas diferentes por tipo de cliente: a aplicação web (carissimi-app) usa a
+  porta 8884 (Websocket com TLS, caminho /mqtt — é o único jeito de um navegador falar MQTT). O
+  CLP (carissimi-clp) deve usar a porta 8883 (MQTT nativo com TLS) — CLPs industriais como o
+  LOGO! normalmente não falam Websocket, só o protocolo MQTT "puro". NÃO são a mesma porta.
+- O recurso "Data Hub" (que mandaria a mensagem direto pro Supabase sem nenhum código, via
+  webhook) só está disponível nos planos pagos (Professional/Enterprise) da HiveMQ — NÃO existe
+  no plano gratuito Serverless. Por isso ainda precisamos da "ponte" (ver painel-teste-mqtt.html)
+  para levar os dados do MQTT até o Supabase.
+- Armadilha encontrada e resolvida: a biblioteca JS "mqtt.js" (via CDN) apresentou um bug/
+  incompatibilidade específica com esse broker (WebSocket fechava sozinho antes de completar a
+  conexão, mesmo com host/porta/credenciais corretos — confirmado via teste de WebSocket cru que
+  funcionou). Solução: trocar para a biblioteca "Paho MQTT" (a mesma usada nos exemplos oficiais
+  da HiveMQ), que resolveu o problema.
+- Outra armadilha: no formulário da nossa página de teste, o campo "Usuário" mostrava um texto
+  cinza de exemplo (placeholder "carissimi-app") que parecia já preenchido, mas não estava —
+  atenção a esse detalhe visual ao reabrir a página.
+
+--- REALTIME (Supabase) ---
+- No layout atual do painel do Supabase (2026), o toggle de Realtime por tabela NÃO fica mais em
+  "Database > Replication" (essa tela agora é para pipelines de replicação para destinos
+  externos). O lugar certo é "Database > Publications" — abrir a publicação supabase_realtime e
+  confirmar que as tabelas equipamentos (e historico_status) estão incluídas nela.
+- O Supabase tem uma IA integrada que, ao ser consultada sobre Realtime, sugeriu uma arquitetura
+  mais avançada (canais Broadcast privados por empresa + RLS ligado a autenticação de usuário via
+  empresa_id). Essa sugestão está tecnicamente correta, mas é prematura: o projeto ainda não tem
+  tela de login/autenticação nem mais de uma empresa em uso real. DECISÃO: adiar essa mudança
+  para quando a Fase 7 estiver de fato endereçando login + multi-empresa; até lá, manter o método
+  mais simples já implementado (postgres_changes no dashboard.js) e RLS permissivo/desligado
+  apenas em ambiente de desenvolvimento, sem dados sensíveis reais.
+
+- Com o sinal periódico, a tabela equipamentos passa a receber UPDATE a cada ~1 min (ultimo_sinal_em): as
+  telas só podem reagir/piscar quando status_atual mudar (ESPEC 05). Conferir que historico_status continua
+  na publicação supabase_realtime depois da migração.
+
+--- HARDWARE DO CLP ---
+Modelo: Siemens LOGO! 12/24RCE — 6ED1052-1MD08-0BA2
+  - 8 entradas digitais (4 utilizáveis como analógicas 0-10V), 4 saídas digitais
+  - Ethernet, servidor web integrado, expansível por módulos
+  - Firmware CONFIRMADO: LOGO! 8.4 — suporte nativo a MQTT confirmado (informado pela equipe de
+    automação).
+  - TLS CONFIRMADO: segundo divulgação oficial Siemens/Mouser sobre o LOGO! 8.4, o módulo
+    suporta "conexão segura e criptografada com a nuvem via protocolo TLS do LOGO!", tanto para
+    nuvens pré-configuradas (AWS/Azure/Alibaba) quanto para "Open MQTT" (qualquer broker MQTT
+    de escolha) — ou seja, tecnicamente dá pra conectar direto num broker privado como o
+    HiveMQ Cloud com TLS. Falta a equipe de automação confirmar/configurar isso na prática.
+  - Ainda não confirmado se há IP fixo/público no local do torno na fábrica (na prática, não é
+    necessário: MQTT funciona com conexão de SAÍDA do CLP até o broker, sem precisar de IP
+    público). Recomendado configurar IP local fixo/reserva de DHCP para o LOGO! na rede da
+    fábrica, para evitar queda de conexão por troca de IP local.
+
+--- TESTE DE CONECTIVIDADE MQTT (validado manualmente) ---
+- Objetivo do teste: validar o fluxo MQTT (publish/subscribe) antes de conectar o CLP real,
+  usando um broker público gratuito só para aprendizado/prototipagem.
+- Broker usado: broker.hivemq.com (broker público de testes da HiveMQ — gratuito, sem login,
+  NÃO deve ser usado com dados reais/sensíveis, qualquer pessoa no mundo pode ler/escrever nos
+  tópicos). Antes de dados reais em produção, migrar para um broker privado com autenticação
+  (ex: HiveMQ Cloud, camada gratuita com usuário/senha).
+- Ferramenta de teste usada no navegador: https://www.hivemq.com/demos/websocket-client/
+  (o link mqtt-dashboard.com enviado pela equipe de automação é só um painel de estatísticas do
+  broker, não é o cliente de teste — não confundir os dois).
+- Conexão que funcionou: Host broker.hivemq.com, Porta 8884 (TLS Websocket) com SSL habilitado.
+  A porta 8000 (Websocket sem TLS) apresentou timeout no teste realizado.
+- Tópico definido para o projeto: carissimi/torno01/status
+  (convenção a manter para os próximos testes e para a configuração real do CLP)
+- Formato de mensagem testado (JSON): {"status": "ativo"}  (também testado "espera" e "inativo")
+- Teste de publish/subscribe manual: OK, mensagem publicada apareceu corretamente no subscriber.
+- Ferramenta própria criada: painel-teste-mqtt.html — página que conecta automaticamente no
+  broker público, no tópico do projeto, mostra uma "luz piloto" de status (verde/âmbar/vermelho,
+  no mesmo estilo visual do dashboard real) e tem botões para simular o CLP publicando
+  ativo/espera/inativo, sem precisar do cliente da HiveMQ. Serve de ponte entre o teste manual e
+  a integração real no dashboard.js.
+
+--- ARQUITETURA DE INGESTÃO DE DADOS (MQTT -> Supabase) ---
+DECISÃO TOMADA: usuário não quer investir em equipamento dedicado (ex: Raspberry Pi). Caminho
+escolhido:
+  - CLP publica direto num broker privado na nuvem (HiveMQ Cloud, plano gratuito — ver seção
+    BROKER PRIVADO), usando TLS (confirmado como suportado pelo LOGO! 8.4).
+  - Como o plano gratuito não tem o recurso de webhook automático (Data Hub), a "ponte" que leva
+    os dados do MQTT até o Supabase roda como uma página HTML (painel-teste-mqtt.html) aberta no
+    navegador de um computador já existente (não precisa comprar nada) — suficiente para testes
+    e para a demonstração acadêmica. Não é a solução definitiva de produção 24/7, mas atende o
+    escopo do projeto de faculdade.
+  - Alternativas mantidas como observação, caso o cenário mude no futuro (produção real,
+    fábrica rodando sem supervisão constante): gateway local (Raspberry Pi/mini-PC) ou script
+    hospedado gratuitamente na nuvem (Railway/Render).
+  - PROPOSTA (05/10/2026, sugestão do professor — em avaliação): Node-RED como camada de
+    tradução entre o CLP e o sistema (fluxo e condições no item I das DECISÕES). Se adotado,
+    substitui a ponte em página HTML e passa a ser a alternativa "gateway local ou script na
+    nuvem" acima.
+
+--- SEGURANÇA ---
+- ATENÇÃO: a senha do projeto Supabase foi exposta em versões anteriores deste arquivo de
+  contexto (texto puro). Recomendado trocar a senha do projeto e não versionar/colar credenciais
+  em arquivos de contexto texto puro — preferir um gerenciador de senhas ou variável de ambiente
+  local (.env, fora do controle de versão) e referenciar aqui apenas "ver .env local".
+- RLS por empresa: DECISÃO de adiar para a 2ª fase (junto com o login), mantendo política permissiva só
+  com dados de teste (ver o ATENÇÃO de 02/10/2026 abaixo).
+- Reforço: o broker público (broker.hivemq.com) usado nos testes é visível a qualquer pessoa.
+  Nunca publicar ali dados reais da fábrica ou credenciais — só o mensagens de teste combinadas.
+- ATENÇÃO (02/10/2026): o site agora é PÚBLICO na Vercel e a chave anon do Supabase fica em
+  js/supabaseClient.js (visível a qualquer visitante). Com RLS desligado/permissivo, qualquer
+  pessoa poderia ler ou alterar as tabelas. Por decisão do usuário, RLS e login ficam para a 2ª
+  fase; até lá, só dados de teste — NUNCA colocar dados reais da Carissimi antes de ativar o RLS
+  por empresa.
+- Credenciais: a chave service_role do Supabase e as senhas do HiveMQ nunca entram em arquivos do projeto, no
+  Git, neste CONTEXTO ou em prompts de IA; ao enviar js/supabaseClient.js a uma IA, trocar a chave anon por XXXX.
+
+--- ARTIGO — FUNDAMENTAÇÃO TEÓRICA (Fase 3, PRÓXIMO FOCO) ---
+- Objetivo: escrever o artigo do trabalho de Governança de TI (SENAI), usando o CARISSIMI IoT como
+  exemplo prático.
+- Temas previstos (sugestão a validar; a estrutura final depende das exigências da disciplina):
+  Indústria 4.0; IoT industrial; SCADA e MES; CLP e o protocolo MQTT; indicadores de produtividade
+  (disponibilidade, tempo programado de produção, OEE); governança e uso dos dados da
+  produção para decisão.
+- Exemplos do projeto que ilustram a teoria: régua do turno (tempo programado x tempo corrido),
+  separação entre estado atual e histórico de eventos, escolha do MQTT com TLS, decisões de
+  escopo (o que ficou para a 2ª fase).
+- Pontos do projeto que rendem texto: aderência PARCIAL ao OEE (o sistema mede a Disponibilidade; Performance
+  e Qualidade ficam como trabalho futuro); perdas de disponibilidade (quebra, ociosidade, setup) e
+  como cada uma aparece nos status; contador de execuções como estimativa de produção sem
+  controle de peças (limites explicados no item D); Node-RED como camada de borda que traduz e
+  padroniza os sinais do CLP; uso de custo de oportunidade em vez de "custo de parada".
+- Pendente: confirmar normas de formatação, tamanho e prazo exigidos pela disciplina.
+
+--- REGRAS DE ATUAÇÃO DA IA ---
+- Aja como um especialista em desenvolvimento de sistemas web/IoT e mentor.
+- Meu conhecimento de programação é zero/básico. Dê instruções passo a passo (onde clicar, o
+  que colar) e, ao fornecer código, indique o arquivo exato e como testar.
+- Priorize ferramentas gratuitas e de fácil manutenção, sem instalações complexas no PC.
+- Grafia: a empresa e o projeto se chamam CARISSIMI (um R só). Nunca escrever "CARRISSIMI".
+- Para conferir o estado real do sistema, usar o site publicado: https://carissimi-iot.vercel.app/
+  (a IA só enxerga a estrutura da página; números e dados carregados pelo JavaScript precisam
+  ser conferidos pelo usuário, com print).
+- Não ampliar o escopo além do que é essencial para a apresentação da faculdade; o restante
+  fica registrado como 2ª fase.
+- Nomenclatura: "Disponibilidade (OEE)" = ATIVO ÷ tempo programado; "Máquina ligada" = ATIVO + EM_ESPERA.
+  Nunca chamar o sistema de "OEE completo". O contador mostra "Execuções", nunca "peças".
+- Status válidos: ATIVO, EM_ESPERA, INATIVO (+ SEM_SINAL técnico). Não existem SETUP nem DESLIGADO.
+- Ao implementar com IA, usar as ESPEC 00 a 08 (pasta especificacoes_v10). Em conflito entre uma ESPEC e
+  este CONTEXTO, vale este CONTEXTO (e a ESPEC deve ser corrigida).

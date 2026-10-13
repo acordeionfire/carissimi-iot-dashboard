@@ -470,3 +470,89 @@ td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   section.painel:has(table) { break-inside: auto; }
   tr { break-inside: avoid; }
 }
+
+/* ---------- Configurações (tela configuracoes.html) ---------- */
+/* Cole este bloco no FIM do style.css. Só usa variáveis do :root. */
+
+.cfg-empresa { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0 0 16px; }
+.cfg-dado { padding: 12px 14px; border: 1px solid var(--borda); border-radius: 8px; background: rgba(36, 44, 53, 0.3); min-width: 0; }
+.cfg-dado dt { margin: 0 0 4px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--texto-suave); }
+.cfg-dado dd { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+.cfg-dado dd.cfg-mono { font-family: var(--mono); }
+
+.cfg-campo label { display: block; margin-bottom: 6px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--texto-suave); }
+.cfg-campo-fuso { max-width: 420px; }
+.cfg-ajuda { margin: 6px 0 0; font-size: 12px; color: rgba(149, 160, 170, 0.85); }
+
+.cfg-select, .cfg-hora { border: 1px solid var(--borda); border-radius: 8px; background: rgba(14, 20, 27, 0.6); color: var(--texto); font-size: 14px; }
+.cfg-select { width: 100%; padding: 9px 10px; font-family: var(--fonte); }
+.cfg-select:focus-visible, .cfg-hora:focus-visible { border-color: var(--primaria); }
+.cfg-select:disabled { opacity: 0.55; }
+.cfg-hora { width: 84px; padding: 8px 6px; text-align: center; font-family: var(--mono); }
+.cfg-hora[aria-invalid="true"] { border-color: rgba(237, 64, 66, 0.5); background: rgba(237, 64, 66, 0.08); }
+
+.cfg-valores { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 20px; }
+.cfg-entrada { display: flex; align-items: center; border: 1px solid var(--borda); border-radius: 8px; background: rgba(14, 20, 27, 0.6); }
+.cfg-entrada:focus-within { border-color: var(--primaria); }
+.cfg-entrada span { padding: 0 10px; font-family: var(--mono); font-size: 12px; color: var(--texto-suave); white-space: nowrap; }
+.cfg-entrada input { flex: 1; min-width: 0; padding: 9px 0; border: 0; outline: none; background: transparent; color: var(--texto); font-family: var(--mono); font-size: 14px; text-align: right; }
+
+.cfg-atalhos { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.cfg-semana { display: flex; flex-direction: column; gap: 8px; }
+.cfg-dia { display: grid; grid-template-columns: 96px minmax(0, 1fr) auto; gap: 12px; align-items: start; padding: 10px 12px; border: 1px solid var(--borda); border-radius: 8px; background: rgba(36, 44, 53, 0.25); }
+.cfg-dia.com-erro { border-color: rgba(237, 64, 66, 0.5); background: rgba(237, 64, 66, 0.08); }
+.cfg-dia-nome { padding-top: 8px; font-size: 14px; font-weight: 600; }
+.cfg-faixas { display: flex; flex-direction: column; gap: 8px; }
+.cfg-faixa { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.cfg-sep { font-family: var(--mono); font-size: 11px; color: var(--texto-suave); }
+.cfg-fechado { padding-top: 8px; font-size: 13px; color: var(--texto-suave); }
+.cfg-dia-lado { display: flex; align-items: center; gap: 10px; }
+.cfg-dia-total { min-width: 74px; text-align: right; font-family: var(--mono); font-size: 12px; color: var(--texto-suave); white-space: nowrap; }
+.cfg-mini { padding: 5px 10px; font-size: 11px; }
+
+.cfg-resumo { margin: 14px 0 0; font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em; color: var(--primaria); }
+.cfg-nota { margin: 12px 0 0; font-size: 13px; color: rgba(149, 160, 170, 0.85); max-width: 80ch; }
+#cfgAvisoSemHorario { margin-top: 12px; }
+.cfg-erros { margin: 12px 0 0; padding: 10px 14px 10px 30px; border: 1px solid rgba(237, 64, 66, 0.5); border-radius: 8px; background: rgba(237, 64, 66, 0.1); color: var(--inativo); font-size: 13px; }
+.cfg-erros[hidden], .aviso[hidden] { display: none; }
+
+.cfg-acoes { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+.cfg-acoes .espaco { flex: 1; }
+.cfg-mensagem { font-family: var(--mono); font-size: 12px; color: var(--texto-suave); }
+.cfg-mensagem.ok { color: var(--ativo); }
+.cfg-mensagem.erro { color: var(--inativo); }
+.botao:disabled { opacity: 0.45; cursor: not-allowed; }
+
+@media (max-width: 900px) {
+  .cfg-empresa { grid-template-columns: 1fr; }
+  .cfg-valores { grid-template-columns: 1fr; }
+  .cfg-dia { grid-template-columns: 1fr; gap: 8px; }
+  .cfg-dia-nome, .cfg-fechado { padding-top: 0; }
+  .cfg-dia-lado { justify-content: space-between; }
+  .cfg-dia-total { text-align: left; }
+}
+@media (max-width: 520px) {
+  .cfg-atalhos .botao { flex: 1 1 100%; }
+  .cfg-hora { width: 72px; }
+}
+@media print {
+  .cfg-atalhos, .cfg-acoes, .cfg-mini { display: none; }
+}
+
+
+/* ---------- Dashboard v10 (index.html) ---------- */
+/* Cole este bloco no FIM do style.css. Só usa variáveis do :root. */
+
+/* KPIs do período: 6 cartões em 3 colunas (2 linhas). Para voltar a 4 colunas, tire a classe grade-kpi-3 do index.html. */
+.grade-kpi.grade-kpi-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 1180px) { .grade-kpi.grade-kpi-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* vários avisos empilhados na faixa de avisos */
+#faixaAviso .aviso + .aviso { margin-top: 8px; }
+
+/* estado técnico SEM SINAL na linha do tempo (usa o cinza de "sem dados") */
+.b-semdados { background: var(--semdados); }
+
+/* hora extra: o mesmo verde do ativo, mais suave e listrado */
+.led-extra { background: var(--ativo); opacity: 0.55; }
+.lt-seg.fora-turno { opacity: 0.6; background-image: repeating-linear-gradient(135deg, rgba(0, 0, 0, 0.35) 0 3px, transparent 3px 6px); }
